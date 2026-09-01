@@ -1,0 +1,26 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/app:/app/app
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: thinker
+      POSTGRES_PASSWORD: thinker
+      POSTGRES_DB: thinker
+    ports:
+      - "5432:5432"
+    volumes:
+      - thinker_pgdata:/var/lib/postgresql/data
+
+volumes:
+  thinker_pgdata:
