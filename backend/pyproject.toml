@@ -7,17 +7,14 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.19.1",
+    "asyncpg>=0.31.0",
     "fastapi>=0.141.1",
+    "google-genai>=2.21.0",
     "pydantic-settings>=2.15.0",
+    "sqlalchemy[asyncio]>=2.0",
     "uvicorn[standard]>=0.52.4",
 ]
-
-[project.scripts]
-thinker-backend = "thinker_backend:main"
-
-[build-system]
-requires = ["uv_build>=0.12.8,<0.13.0"]
-build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
@@ -26,8 +23,20 @@ dev = [
     "ruff>=0.16.5",
 ]
 
-[tool.pytest.ini_options]
-pythonpath = ["."]
-
 [tool.uv]
 package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["B008"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
