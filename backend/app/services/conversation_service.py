@@ -36,19 +36,23 @@ async def get_conversation(
 
 
 async def get_messages(session: AsyncSession, conversation_id: uuid.UUID) -> list[Message] | None:
-    result = await session.execute(select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at))
+    result = await session.execute(
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at)
+    )
 
     return list(result.scalars().all())
-
 
 
 async def add_message(
     session: AsyncSession, conversation_id: uuid.UUID, role: str, content: str
 ) -> Message:
     message = Message(
-        conversation_id=conversation_id, 
-        role=role, 
-        content=content,)
+        conversation_id=conversation_id,
+        role=role,
+        content=content,
+    )
     session.add(message)
     await session.flush()
     return message
