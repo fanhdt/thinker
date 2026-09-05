@@ -17,14 +17,11 @@ class EmbeddingService:
     def __init__(self) -> None:
         self._client = genai.Client(api_key=settings.gemini_api_key)
 
-
     async def embed_document(self, text: str) -> list[float]:
         return await self._embed(text, task_type="RETRIEVAL_DOCUMENT")
 
-
     async def embed_query(self, text: str) -> list[float]:
         return await self._embed(text, task_type="RETRIEVAL_QUERY")
-
 
     async def _embed(self, text: str, *, task_type=str) -> list[float]:
         try:

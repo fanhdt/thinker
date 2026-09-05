@@ -1,27 +1,17 @@
 import logging
-import math
 import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import Memory
+from app.services.similarity import cosine_similarity
 
 DEDUP_THRESHOLD = 0.92
 RETRIEVAL_THRESHOLD = 0.5
 MAX_RETRIEVED_MEMORIES = 5
 
 logger = logging.getLogger(__name__)
-
-
-def cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot_product = sum(x * y for x, y in zip(a, b, strict=True))
-    magnitude_a = math.sqrt(sum(x * x for x in a))
-    magnitude_b = math.sqrt(sum(x * x for x in b))
-
-    if magnitude_a == 0 or magnitude_b == 0:
-        return 0.0
-    return dot_product / (magnitude_a * magnitude_b)
 
 
 async def get_all_memories(session: AsyncSession, user_id: uuid.UUID) -> list[Memory]:

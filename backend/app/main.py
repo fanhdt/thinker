@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import chat, conversations, memories
+from app.api import chat, conversations, documents, memories
 from app.core.config import settings
 from app.core.logging_config import configure_logging
 
@@ -31,6 +31,7 @@ app = FastAPI(
 app.include_router(chat.router)
 app.include_router(conversations.router)
 app.include_router(memories.router)
+app.include_router(documents.router)
 
 
 @app.get("/health")
