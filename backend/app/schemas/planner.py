@@ -10,6 +10,8 @@ class PlanRequest(BaseModel):
 class TaskResultOut(BaseModel):
     description: str
     result: str
+    passed_evaluation: bool
+    attempts: int
 
 
 class PlanResponse(BaseModel):

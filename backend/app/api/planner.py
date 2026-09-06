@@ -29,10 +29,11 @@ async def create_and_execute_plan(
     await conversation_service.add_message(session, conversation_id, "user", payload.goal)
 
     try:
-        execution_result = await planner_service.run_plan(llm,payload.goal)
+        execution_result = await planner_service.run_plan(llm, payload.goal)
     except LLMServiceError as exc:
         await session.rollback()
         logger.error("Plan execution failed:%s", exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     summary = planner_service.build_summary_text(execution_result)
     await conversation_service.add_message(session, conversation_id, "assistant", summary)
@@ -41,7 +42,12 @@ async def create_and_execute_plan(
     return PlanResponse(
         goal=execution_result.goal,
         tasks=[
-            TaskResultOut(description=e.description, result=e.result)
+            TaskResultOut(
+                description=e.description,
+                result=e.result,
+                passed_evaluation=e.passed_evaluation,
+                attempts=e.attempts,
+            )
             for e in execution_result.executions
         ],
         summary=summary,

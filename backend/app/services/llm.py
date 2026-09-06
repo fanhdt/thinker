@@ -31,6 +31,11 @@ class Plan(BaseModel):
     tasks: list[PlanTask]
 
 
+class TaskEvaluation(BaseModel):
+    is_correct: bool
+    feedback: str = ""
+
+
 class LLMServiceError(Exception):
     def __init__(self, message: str, *, retryable: bool = False):
         super().__init__(message)
@@ -192,6 +197,37 @@ class LLMService:
                 f"Gemin mengembalikan hasil kosong untuk task '{task_description}'."
             )
         return response.text
+
+    async def evaluate_result(self, task_description: str, result: str) -> TaskEvaluation:
+        prompt = (
+            "Evaluasi apakah Hasil berikut benar benar menyelesaikan "
+            "Task dengan baik. \n\n"
+            f'Task: "{task_description}"\n\n'
+            f"Hasil:\n{result}\n\n"
+            "Kalau hasil sudah cukup baik dan relevan, jawab is_correct=true."
+            "Kalau ada yang kurang, salah, atau tidak relevan dengan task, "
+            "jawab is_correct=false dan isi 'feedback' dengan penjealsan"
+            "SINGKAT apa yang perlu diperbaiki"
+        )
+
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=self._model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=TaskEvaluation,
+                ),
+            )
+        except APIError as exc:
+            logger.error("Gemini evaluation error: %s, exc")
+            raise LLMServiceError(f"Gagal mengevaluasi hasil : {exc}") from exc
+
+        evaluation: TaskEvaluation | None = response.parsed
+        if evaluation is None:
+            return TaskEvaluation(is_correct=True, feedback="")
+
+        return evaluation
 
 
 llm_service = LLMService()
