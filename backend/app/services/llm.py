@@ -6,6 +6,9 @@ from google.genai.errors import APIError
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.services.tools.registry import AVAILABLE_TOOLS
+
+MAX_TOOL_CALLS_PER_REQUEST = 5
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +16,19 @@ logger = logging.getLogger(__name__)
 class MemoryExtraction(BaseModel):
     has_memory: bool
     fact: str | None = None
+
+
+class PlanTask(BaseModel):
+    """Satu langkah kerja dalam sebuah Plan."""
+
+    description: str
+
+
+class Plan(BaseModel):
+    """Bentuk Output TERSTRUKTUR planner (Fase 6)"""
+
+    goal: str
+    tasks: list[PlanTask]
 
 
 class LLMServiceError(Exception):
@@ -57,10 +73,12 @@ class LLMService:
             for turn in history
         ]
 
-        config = (
-            types.GenerateContentConfig(system_instruction=system_instruction)
-            if system_instruction
-            else None
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            tools=AVAILABLE_TOOLS,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                maximum_remote_calls=MAX_TOOL_CALLS_PER_REQUEST
+            ),
         )
         try:
             response = await self._client.aio.models.generate_content(
@@ -108,6 +126,72 @@ class LLMService:
         if result and result.has_memory and result.fact:
             return result.fact
         return None
+
+    async def create_plan(self, goal: str) -> Plan:
+        prompt = (
+            "Anda adalah planner untuk asisten AI. Pecah goal berikut"
+            "menjadi beberapa task KONKRET dan BERURUTAN yang -- kalau"
+            "dikerjakan satu per satu -- akan mencapai goal tersebut.\n\n"
+            f'Goal: "{goal}"\n\n'
+            "Aturan:\n"
+            "- Setiap task harus SPESIFIK dan bisa dikerjakan sendiri "
+            "(bukan sub-goal abstrak).\n"
+            "- Jangan buat lebih dari 6 task -- kalau goal-nya sangat "
+            "sederhana, 1-2 task saja cukup.\n"
+            "- Urutkan task sesuai urutan pengerjaan yang logis."
+        )
+
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=self._model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=Plan,
+                ),
+            )
+        except APIError as exc:
+            logger.error("Gemini planning erreor:%s", exc)
+            raise LLMServiceError(f"Gagal membuat plan:{exc}") from exc
+
+        plan: Plan | None = response.parsed
+        if plan is None:
+            raise LLMServiceError("Gemini mengembalikan plan yang tidak valid.")
+
+        return plan
+
+    async def execute_task(self, task_description: str, prior_context: str) -> str:
+        prompt = f'Kerjakan task berikut: "{task_description}"'
+        if prior_context:
+            prompt += (
+                f"\n\nKonteks dari task-task sebelumnya yang sudahdikerjakan:\n {prior_context}"
+            )
+
+        config = types.GenerateContentConfig(
+            tools=AVAILABLE_TOOLS,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                maximum_remote_calls=MAX_TOOL_CALLS_PER_REQUEST
+            ),
+        )
+
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=self._model,
+                contents=prompt,
+                config=config,
+            )
+        except APIError as exc:
+            logger.error("Gemini task execution error : %s", exc)
+            retryable = exc.code in (429, 503)
+            raise LLMServiceError(
+                f"Gagal menjalankan task '{task_description}':{exc}", retryable=retryable
+            ) from exc
+
+        if not response.text:
+            raise LLMServiceError(
+                f"Gemin mengembalikan hasil kosong untuk task '{task_description}'."
+            )
+        return response.text
 
 
 llm_service = LLMService()
