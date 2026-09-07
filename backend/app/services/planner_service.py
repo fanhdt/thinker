@@ -20,14 +20,14 @@ class PlanExecutionResult:
 
 
 async def _execute_task_with_reflection(
-    llm: LLMService, task_description: str, contexct_so_far: str
+    llm: LLMService, task_description: str, context_so_far: str
 ) -> TaskExecution:
     feedback = ""
     result = ""
 
     total_attempts = MAX_REFLECTION_ATTEMPTS + 1
     for attempt in range(1, total_attempts + 1):
-        prompt_context = contexct_so_far
+        prompt_context = context_so_far
         if feedback:
             prompt_context += (
                 f"\n\nCatatan dari percobaan sebelumnya yang KURANG TEPAT"
@@ -54,16 +54,18 @@ async def _execute_task_with_reflection(
     )
 
 
-async def run_plan(llm: LLMService, goal: str) -> PlanExecutionResult:
+async def run_plan(
+    llm: LLMService, goal: str, personalization_context: str = ""
+) -> PlanExecutionResult:
     plan: Plan = await llm.create_plan(goal)
 
     executions: list[TaskExecution] = []
-    context_so_far = ""
+    context_so_far = f"{personalization_context}\n" if personalization_context else ""
 
     for task in plan.tasks:
-       execution = await _execute_task_with_reflection(llm, task.description, context_so_far)
-       executions.append(execution)
-       context_so_far += f'\nTask : "{task.description}"\nHasil: {execution.result}\n' 
+        execution = await _execute_task_with_reflection(llm, task.description, context_so_far)
+        executions.append(execution)
+        context_so_far += f'\nTask : "{task.description}"\nHasil: {execution.result}\n'
 
     return PlanExecutionResult(goal=goal, executions=executions)
 

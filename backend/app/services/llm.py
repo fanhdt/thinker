@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 class MemoryExtraction(BaseModel):
     has_memory: bool
     fact: str | None = None
+    importance: int = 3
 
 
 class PlanTask(BaseModel):
@@ -101,7 +102,7 @@ class LLMService:
 
         return response.text
 
-    async def extract_fact(self, message: str) -> str | None:
+    async def extract_fact(self, message: str) -> MemoryExtraction | None:
         prompt = (
             "Analisis pesan berikut dari user sebuah asisten AI personal.\n"
             "Apakah pesan ini mengandung FAKTA PERSONAL yang layak diingat "
@@ -111,7 +112,10 @@ class LLMService:
             f'Pesan: "{message}"\n\n'
             "Kalau ADA fakta, tulis ulang sebagai satu kalimat singkat & "
             'netral berperspektif orang ketiga (mis. "User alergi kacang."), '
-            "bukan mengutip mentah."
+            "bukan mengutip mentah. Beri juga `importance` (1 - 5):"
+            "5 = Sangat penting/menyangkut keselamatan dan kesehatan"
+            "(mis. alergi, kondisi medis), 3 = preferensi biasa"
+            "(mis. makanan favorit), 1 = detail remeh"
         )
 
         try:
@@ -129,7 +133,7 @@ class LLMService:
 
         result: MemoryExtraction | None = response.parsed
         if result and result.has_memory and result.fact:
-            return result.fact
+            return result
         return None
 
     async def create_plan(self, goal: str) -> Plan:

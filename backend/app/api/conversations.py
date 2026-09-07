@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_embedding_service, get_llm_service
 from app.db.session import get_db_session
 from app.models.document_chunk import DocumentChunk
+from app.models.goal import Goal
 from app.models.memory import Memory
 from app.schemas.conversation import (
     ConversationCreate,
@@ -15,7 +16,13 @@ from app.schemas.conversation import (
     SendMessageRequest,
     SendMessageResponse,
 )
-from app.services import conversation_service, document_service, memory_service
+from app.services import (
+    conversation_service,
+    document_service,
+    goal_service,
+    memory_service,
+    personalization_service,
+)
 from app.services.embedding_service import EmbeddingService
 from app.services.llm import LLMService, LLMServiceError
 
@@ -48,11 +55,20 @@ async def list_messages(
     return [MessageOut.model_validate(m) for m in messages]
 
 
-def _build_context_instruction(memories: list[Memory], chunks: list[DocumentChunk]) -> str | None:
-    if not memories and not chunks:
+def _build_context_instruction(
+    memories: list[Memory],
+    chunks: list[DocumentChunk],
+    goals: list[Goal],
+    preferences: dict,
+) -> str | None:
+    if not memories and not chunks and not goals and not preferences:
         return None
 
     parts = []
+
+    personalization_text = personalization_service.build_personalization_context(goals, preferences)
+    if personalization_text:
+        parts.append(personalization_text)
 
     if memories:
         facts = "\n".join(f"- {m.content}" for m in memories)
@@ -67,7 +83,9 @@ def _build_context_instruction(memories: list[Memory], chunks: list[DocumentChun
     context = "\n\n".join(parts)
     return (
         f"{context}\n\n"
-        "Gunakan informasi di atas kalau relevan untuk menjawab. Kalau"
+        "Gunakan informasi di atas kalau relevan untuk menjawab. -- termasuk"
+        "menyesuaikan gaya jawabanmu dengan preferensi user, dan "
+        "mempertimbangkan tujuan jangka panjangnya kalau relevan. Kalau"
         "menjawab berdasarkan isi dokumen, sebutkan sumbernya. Kalau"
         "tidak relevan, abaikan saja dan jawab seperti biasa"
     )
@@ -99,7 +117,11 @@ async def send_message(
         relevant_chunks = await document_service.retrieve_relevant_chunks(
             session, conversation.user_id, query_embedding
         )
-        system_instruction = _build_context_instruction(relevant_memories, relevant_chunks)
+        active_goals = await goal_service.get_goals(session, conversation.user_id, status="active")
+        user = await conversation_service.get_or_create_default_user(session)
+        system_instruction = _build_context_instruction(
+            relevant_memories, relevant_chunks, active_goals, user.preferences
+        )
     except LLMServiceError as exc:
         logger.warning("Gagal retrieval memori (non-fatal):%s", exc)
 
@@ -116,11 +138,15 @@ async def send_message(
     await conversation_service.add_message(session, conversation_id, "assistant", reply)
 
     try:
-        fact = await llm.extract_fact(payload.message)
-        if fact:
-            fact_embedding = await embedder.embed_document(fact)
+        extraction = await llm.extract_fact(payload.message)
+        if extraction is not None:
+            fact_embedding = await embedder.embed_document(extraction.fact)
             await memory_service.store_memory_if_new(
-                session, conversation.user_id, fact, fact_embedding
+                session,
+                conversation.user_id,
+                extraction.fact,
+                fact_embedding,
+                importance=extraction.importance,
             )
     except LLMServiceError as exc:
         logger.warning("gagal ekstraksi memori (non fatal):%s", exc)

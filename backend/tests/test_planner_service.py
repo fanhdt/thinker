@@ -85,3 +85,21 @@ async def test_build_summary_text_flags_tasks_that_never_passed():
 
     summary = build_summary_text(execution_result)
     assert "belum sempurna" in summary
+
+
+async def test_personalization_context_reacher_every_task():
+    fake_llm = FakeLLMService(evaluation_pattern=[True], num_tasks=2)
+    personalization = "Preferensi user:\n- tone:santai"
+
+    await run_plan(fake_llm, "Goal contoh", personalization_context=personalization)
+
+    assert "tone:santai" in fake_llm.received_contexts[0]
+    assert "tone:santai" in fake_llm.received_contexts[1]
+
+
+async def test_empty_personalization_context_does_not_break_run_plan():
+    fake_llm = FakeLLMService(evaluation_pattern=[True])
+
+    execution_result = await run_plan(fake_llm, "Goal contoh", personalization_context="")
+    
+    assert execution_result.executions[0].passed_evaluation is True

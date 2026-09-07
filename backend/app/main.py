@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import chat, conversations, documents, memories, planner
+from app.api import chat, conversations, documents, goals, memories, planner, profile
 from app.core.config import settings
 from app.core.logging_config import configure_logging
 
@@ -33,6 +33,8 @@ app.include_router(conversations.router)
 app.include_router(memories.router)
 app.include_router(documents.router)
 app.include_router(planner.router)
+app.include_router(profile.router)
+app.include_router(goals.router)
 
 
 @app.get("/health")

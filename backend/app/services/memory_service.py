@@ -11,7 +11,16 @@ DEDUP_THRESHOLD = 0.92
 RETRIEVAL_THRESHOLD = 0.5
 MAX_RETRIEVED_MEMORIES = 5
 
+SIMILARITY_WEIGHT = 0.7
+IMPORTANCE_WEIGHT = 0.4
+MAX_IMPORTANCE = 5
+
 logger = logging.getLogger(__name__)
+
+
+def _compute_final_score(similarity: float, importance: int) -> float:
+    normalized_importance = importance / MAX_IMPORTANCE
+    return (SIMILARITY_WEIGHT * similarity) + (IMPORTANCE_WEIGHT * normalized_importance)
 
 
 async def get_all_memories(session: AsyncSession, user_id: uuid.UUID) -> list[Memory]:
@@ -21,7 +30,11 @@ async def get_all_memories(session: AsyncSession, user_id: uuid.UUID) -> list[Me
 
 
 async def store_memory_if_new(
-    session: AsyncSession, user_id: uuid.UUID, content: str, embedding: list[float]
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    content: str,
+    embedding: list[float],
+    importance: int = 3,
 ) -> Memory | None:
     existing_memories = await get_all_memories(session, user_id)
 
@@ -29,7 +42,7 @@ async def store_memory_if_new(
         if cosine_similarity(memory.embedding, embedding) >= DEDUP_THRESHOLD:
             return None
 
-    memory = Memory(user_id=user_id, content=content, embedding=embedding)
+    memory = Memory(user_id=user_id, content=content, embedding=embedding, importance=importance)
     session.add(memory)
     await session.flush()
     return memory

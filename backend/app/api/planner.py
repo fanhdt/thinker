@@ -7,7 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_llm_service
 from app.db.session import get_db_session
 from app.schemas.planner import PlanRequest, PlanResponse, TaskResultOut
-from app.services import conversation_service, planner_service
+from app.services import (
+    conversation_service,
+    goal_service,
+    personalization_service,
+    planner_service,
+)
 from app.services.llm import LLMService, LLMServiceError
 
 logger = logging.getLogger(__name__)
@@ -28,8 +33,16 @@ async def create_and_execute_plan(
 
     await conversation_service.add_message(session, conversation_id, "user", payload.goal)
 
+    user = await conversation_service.get_or_create_default_user(session)
+    active_goals = await goal_service.get_goals(session, user.id, status="active")
+    personalization_context = personalization_service.build_personalization_context(
+        active_goals, user.preferences
+    )
+
     try:
-        execution_result = await planner_service.run_plan(llm, payload.goal)
+        execution_result = await planner_service.run_plan(
+            llm, payload.goal, personalization_context
+        )
     except LLMServiceError as exc:
         await session.rollback()
         logger.error("Plan execution failed:%s", exc)
