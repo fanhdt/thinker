@@ -64,7 +64,7 @@ class LLMService:
             )
         except APIError as exc:
             logger.error("Gemini API error: %s", exc)
-            retryable = exc.code in (429.503)
+            retryable = exc.code in (429, 503)
             raise LLMServiceError(f"Gagal menghubungi gemini:{exc}", retryable=retryable) from exc
 
         if not response.text:
