@@ -101,5 +101,5 @@ async def test_empty_personalization_context_does_not_break_run_plan():
     fake_llm = FakeLLMService(evaluation_pattern=[True])
 
     execution_result = await run_plan(fake_llm, "Goal contoh", personalization_context="")
-    
+
     assert execution_result.executions[0].passed_evaluation is True

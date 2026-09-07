@@ -37,6 +37,10 @@ class TaskEvaluation(BaseModel):
     feedback: str = ""
 
 
+class MessageRoute(BaseModel):
+    needs_planning: bool
+
+
 class LLMServiceError(Exception):
     def __init__(self, message: str, *, retryable: bool = False):
         super().__init__(message)
@@ -232,6 +236,37 @@ class LLMService:
             return TaskEvaluation(is_correct=True, feedback="")
 
         return evaluation
+
+    async def classify_message(self, message: str) -> bool:
+        prompt = (
+            "Tentukan apakah pesan berikut BUTUH RENCANA BERTAHAP"
+            "(dipecah jadi beberapa langkah berurutan) untuk "
+            "diselesaikan dengan baik, atau cukup dijawab LANGSUNG"
+            "dalam satu balasan chat biasa.\n\n"
+            f'Pesan: "{message}"\n\n'
+            "needs_planning=true HANYA kalo pesan ini benar-benar"
+            "meminta sesuatu yang KOMPLEKS dan berlangkah langkah"
+            '(mis. "rencanakan...", "buatkan rencana...", "bantu aku '
+            'mempersiapkan..." untuk hal yang butuh beberapa tahap '
+            "berurutan). Pertanyaan biasa, obrolan, permintaan info "
+            "sederhana, atau perhitungan langsung -> needs_planning=false."
+        )
+
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=self._model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=MessageRoute,
+                ),
+            )
+        except APIError as exc:
+            logger.error("Gemini routing error: %s", exc)
+            return False
+
+        route: MessageRoute | None = response.parsed
+        return route.needs_planning if route else False
 
 
 llm_service = LLMService()
