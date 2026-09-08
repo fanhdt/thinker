@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import httpx
 
 from app.core.config import settings
 from app.db.session import async_session_factory
@@ -16,7 +17,7 @@ POLL_ERROR_BACKOFF_SECONDS = 5
 async def _handle_update(client: TelegramClient, update: dict) -> None:
     message = update.get("message")
     if message is None or "text" not in message:
-        # Abaikan update yang bukan pesan teks seprti foto, stickler, join event, dst --
+        # Abaikan update yang bukan pesan teks seperti foto, sticker, join event, dst --
         # Thinker cuma paham teks untuk saat ini
         return
     chat_id = message["chat"]["id"]
@@ -31,16 +32,33 @@ async def _handle_update(client: TelegramClient, update: dict) -> None:
             result = await message_pipeline.process_incoming_message(
                 session, llm_service, embedding_service, conversation, text
             )
-            await client.send_message(chat_id, result.reply)
+          
         except LLMServiceError as exc:
             logger.error(
                 "Gagal proses pesan Telegram dari chat %s: %s",
                 chat_id,
                 exc,
             )
-            await client.send_message(
-            chat_id,
-            "Maaf ada gangguan sementara di sisi saya. Coba lagi sebentar yaa.",
+
+            try:
+                await client.send_message(
+                chat_id,
+                "Maaf ada gangguan sementara di sisi saya. Coba lagi sebentar yaa.",
+                )
+            except httpx.RequestError as exc:
+                logger.error(
+                    "Gagal mengirim pesan error ke chat %s: %s",
+                    chat_id,
+                    exc,
+                )
+            return
+        try:
+            await client.send_message(chat_id, result.reply)
+        except httpx.RequestError as exc:
+            logger.error(
+                "Gagal mengirim response ke chat %s: %s",
+                chat_id,
+                exc,
             )
 
 
