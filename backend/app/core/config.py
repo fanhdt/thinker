@@ -19,4 +19,4 @@ class Settings(BaseSettings):
     )
 
 
-settings = Settings()
+settings = Settings() # type: ignore[call-arg]  # pydantic-settings mengisi field wajib dari .env saat runtime
