@@ -46,7 +46,7 @@ async def create_conversation(
 
 @router.get("/{conversation_id}/messages", response_model=list[MessageOut])
 async def list_messages(
-    conversation_id=uuid.UUID,
+    conversation_id:uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
 ) -> list[MessageOut]:
     conversation = await conversation_service.get_conversation(session, conversation_id)
@@ -145,7 +145,7 @@ async def send_message(
 
     try:
         extraction = await llm.extract_fact(payload.message)
-        if extraction is not None:
+        if extraction is not None and extraction.fact is not None:
             fact_embedding = await embedder.embed_document(extraction.fact)
             await memory_service.store_memory_if_new(
                 session,

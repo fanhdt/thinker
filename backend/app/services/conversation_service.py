@@ -35,7 +35,7 @@ async def get_conversation(
     return result.scalar_one_or_none()
 
 
-async def get_messages(session: AsyncSession, conversation_id: uuid.UUID) -> list[Message] | None:
+async def get_messages(session: AsyncSession, conversation_id: uuid.UUID) -> list[Message]:
     result = await session.execute(
         select(Message)
         .where(Message.conversation_id == conversation_id)
