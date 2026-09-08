@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
-from app.services.llm import LLMService, Plan
+from app.services.llm import Plan
+from app.services.llm_provider import PlannerLLM
 
 MAX_REFLECTION_ATTEMPTS = 2
 
@@ -20,7 +21,7 @@ class PlanExecutionResult:
 
 
 async def _execute_task_with_reflection(
-    llm: LLMService, task_description: str, context_so_far: str
+    llm: PlannerLLM, task_description: str, context_so_far: str
 ) -> TaskExecution:
     feedback = ""
     result = ""
@@ -55,7 +56,7 @@ async def _execute_task_with_reflection(
 
 
 async def run_plan(
-    llm: LLMService, goal: str, personalization_context: str = ""
+    llm: PlannerLLM, goal: str, personalization_context: str = ""
 ) -> PlanExecutionResult:
     plan: Plan = await llm.create_plan(goal)
 

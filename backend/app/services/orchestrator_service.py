@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from app.services.llm import LLMService
+from app.services.llm_provider import OrchestratorLLM
 from app.services.planner_service import PlanExecutionResult, build_summary_text, run_plan
 
 
@@ -12,7 +12,7 @@ class OrchestratedResponse:
 
 
 async def handle_message(
-    llm: LLMService,
+    llm: OrchestratorLLM,
     message: str,
     history: list[dict[str, str]],
     context_text: str | None,
