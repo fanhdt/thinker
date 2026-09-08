@@ -247,7 +247,7 @@ class LLMService:
                 ),
             )
         except APIError as exc:
-            logger.error("Gemini evaluation error: %s, exc")
+            logger.error("Gemini evaluation error: %s", exc)
             raise LLMServiceError(f"Gagal mengevaluasi hasil : {exc}") from exc
 
         evaluation = _as_structured(response, TaskEvaluation)
