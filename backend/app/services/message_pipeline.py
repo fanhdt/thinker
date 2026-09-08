@@ -87,12 +87,7 @@ async def process_incoming_message(
     menerjemahkannya jadi bahasa masing masing
     (503 untu HTTP, pesan error untuk telegram, dst)."""
 
-    await conversation_service.add_message(
-        session, 
-        conversation.id, 
-        "user", 
-        message_text
-    )
+    await conversation_service.add_message(session, conversation.id, "user", message_text)
 
     context_text = None
     try:
@@ -139,11 +134,11 @@ async def process_incoming_message(
             fact_embedding = await embedder.embed_document(extraction.fact)
 
             await memory_service.store_memory_if_new(
-                    session,
-                    conversation.user_id,
-                    extraction.fact,
-                    fact_embedding,
-                    importance=extraction.importance,
+                session,
+                conversation.user_id,
+                extraction.fact,
+                fact_embedding,
+                importance=extraction.importance,
             )
     except LLMServiceError as exc:
         logger.warning("gagal ekstraksi memori (non-fatal): %s", exc)

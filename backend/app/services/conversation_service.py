@@ -35,6 +35,29 @@ async def get_conversation(
     return result.scalar_one_or_none()
 
 
+async def get_or_create_conversation_for_telegram_chat(
+    session: AsyncSession, user_id: uuid.UUID, telegram_chat_id: int
+) -> Conversation:
+    """
+    Satu chat Telegram yang dipetakan ke satu Conversation. kalau chat_id ini
+    belum pernah tercatat, buat conversation baru untuknya.
+    """
+    result = await session.execute(
+        select(Conversation).where(Conversation.telegram_chat_id == telegram_chat_id)
+    )
+    conversation = result.scalar_one_or_none()
+    if conversation is not None:
+        return conversation
+
+    conversation = Conversation(
+        user_id=user_id, title="Telegram", telegram_chat_id=telegram_chat_id
+    )
+
+    session.add(conversation)
+    await session.flush()
+    return conversation
+
+
 async def get_messages(session: AsyncSession, conversation_id: uuid.UUID) -> list[Message]:
     result = await session.execute(
         select(Message)

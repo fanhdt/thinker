@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.5-flash"
     database_url: str = "postgresql+asyncpg://thinker:thinker@localhost:5433/thinker"
 
+    telegram_bot_token: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
