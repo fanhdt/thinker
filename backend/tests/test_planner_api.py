@@ -21,7 +21,9 @@ def test_create_and_execute_plan_returns_404_when_conversation_not_found(client)
         "app.api.planner.conversation_service.get_conversation",
         new=AsyncMock(return_value=None),
     ):
-        response = client.post(f"/conversations/{conversation_id}/plan", json={"goal": "Belajar Rust"})
+        response = client.post(
+            f"/conversations/{conversation_id}/plan", json={"goal": "Belajar Rust"}
+        )
 
     assert response.status_code == 404
 
@@ -48,7 +50,9 @@ def test_create_and_execute_plan_returns_503_when_llm_fails(client):
             new=AsyncMock(side_effect=LLMServiceError("gagal membuat plan")),
         ),
     ):
-        response = client.post(f"/conversations/{conversation_id}/plan", json={"goal": "Belajar Rust"})
+        response = client.post(
+            f"/conversations/{conversation_id}/plan", json={"goal": "Belajar Rust"}
+        )
 
     assert response.status_code == 503
 
@@ -63,7 +67,10 @@ def test_create_and_execute_plan_returns_completed_plan(client):
         goal="Belajar Rust",
         executions=[
             TaskExecution(
-                description="Install Rust", result="Rust terinstall", passed_evaluation=True, attempts=1
+                description="Install Rust",
+                result="Rust terinstall",
+                passed_evaluation=True,
+                attempts=1,
             )
         ],
     )
@@ -88,7 +95,9 @@ def test_create_and_execute_plan_returns_completed_plan(client):
             return_value="Ringkasan: goal tercapai",
         ),
     ):
-        response = client.post(f"/conversations/{conversation_id}/plan", json={"goal": "Belajar Rust"})
+        response = client.post(
+            f"/conversations/{conversation_id}/plan", json={"goal": "Belajar Rust"}
+        )
 
     assert response.status_code == 200
     body = response.json()

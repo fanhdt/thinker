@@ -17,4 +17,4 @@ class Settings(BaseSettings):
     )
 
 
-settings = Settings() # type: ignore[call-arg]  # pydantic-settings mengisi field wajib dari .env saat runtime
+settings = Settings()  # type: ignore[call-arg]  # pydantic-settings mengisi field wajib dari .env saat runtime

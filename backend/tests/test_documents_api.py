@@ -20,9 +20,7 @@ def _override_embedder(fake_embedder) -> None:
 
 
 def test_upload_document_rejects_unsupported_content_type(client):
-    response = client.post(
-        "/documents", files={"file": ("gambar.png", b"bukan-teks", "image/png")}
-    )
+    response = client.post("/documents", files={"file": ("gambar.png", b"bukan-teks", "image/png")})
     assert response.status_code == 400
 
 
@@ -37,9 +35,7 @@ def test_upload_document_rejects_file_too_large(client):
 
 def test_upload_document_rejects_when_no_text_extracted(client):
     with patch("app.api.documents.document_service.parse_text", return_value="   "):
-        response = client.post(
-            "/documents", files={"file": ("kosong.txt", b"   ", "text/plain")}
-        )
+        response = client.post("/documents", files={"file": ("kosong.txt", b"   ", "text/plain")})
     assert response.status_code == 400
 
 

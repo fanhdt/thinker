@@ -1,5 +1,4 @@
 import logging
-from typing import TypeVar
 
 from google import genai
 from google.genai import types
@@ -12,13 +11,20 @@ from app.services.tools.registry import AVAILABLE_TOOLS
 MAX_TOOL_CALLS_PER_REQUEST = 5
 
 logger = logging.getLogger(__name__)
-T = TypeVar("T", bound=BaseModel)
 
-def _as_structured(response, model_cls:type[T]) -> T|None:
+
+def _as_structured[T: BaseModel](response, model_cls: type[T]) -> T | None:
     """Validasi tipe `response.parsed` dari gemini secara eksplisit .
-    SDK mengetik `respon.parsed` secara generik (`BaseModel | Dict | Enum | None`) karena dia tidak tau skema spesifik yang kita minta lewat `response_schema` .
-    Mengklaim tipenya lewat anotasi variabel saja (mis. `plan:Plan | None = response.parsed`)
-    TIDAK memvalidasi apapun secara runtime -- kalau gemini pernah mengembalikan bentuk yang tak terduga kode akan lanjut jalan dengan asumsi tipe yang salah, lalu meledak entah dimana di hilir. Fungsi ini memastikan validasi itu benar benar terjadi di satu tempat.
+    SDK mengetik `respon.parsed` secara generik (`BaseModel | Dict | Enum | None`)
+    karena dia tidak tau skema spesifik yang kita minta
+    lewat `response_schema` .
+    Mengklaim tipenya lewat anotasi variabel saja
+    (mis. `plan:Plan | None = response.parsed`)
+    TIDAK memvalidasi apapun secara runtime --
+    kalau gemini pernah mengembalikan bentuk yang tak terduga
+    kode akan lanjut jalan dengan asumsi tipe yang salah,
+    lalu meledak entah dimana di hilir.
+    Fungsi ini memastikan validasi itu benar benar terjadi di satu tempat.
     """
     parsed = response.parsed
     return parsed if isinstance(parsed, model_cls) else None
@@ -146,7 +152,7 @@ class LLMService:
             logger.error("Gemini extraction error :%s", exc)
             raise LLMServiceError(f"Gagal ekstraksi memori :{exc}") from exc
 
-        result= _as_structured(response, MemoryExtraction)
+        result = _as_structured(response, MemoryExtraction)
         if result is None:
             logger.warning("Gemini mengembalikan format ekstraksi memori yang tidak terduga")
             return None
@@ -181,7 +187,7 @@ class LLMService:
             logger.error("Gemini planning erreor:%s", exc)
             raise LLMServiceError(f"Gagal membuat plan:{exc}") from exc
 
-        plan= _as_structured(response, Plan)
+        plan = _as_structured(response, Plan)
         if plan is None:
             raise LLMServiceError("Gemini mengembalikan plan yang tidak valid.")
         return plan
@@ -245,7 +251,9 @@ class LLMService:
             raise LLMServiceError(f"Gagal mengevaluasi hasil : {exc}") from exc
 
         evaluation = _as_structured(response, TaskEvaluation)
-        logger.warning("Gemini mengembalikan format evaluasi yang tak terduga, fallback ke is_correct=True")
+        logger.warning(
+            "Gemini mengembalikan format evaluasi yang tak terduga, fallback ke is_correct=True"
+        )
         if evaluation is None:
             return TaskEvaluation(is_correct=True, feedback="")
 
@@ -279,7 +287,7 @@ class LLMService:
             logger.error("Gemini routing error: %s", exc)
             return False
 
-        route =_as_structured(response, MessageRoute)
+        route = _as_structured(response, MessageRoute)
         return route.needs_planning if route else False
 
 

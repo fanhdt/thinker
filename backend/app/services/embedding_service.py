@@ -23,7 +23,7 @@ class EmbeddingService:
     async def embed_query(self, text: str) -> list[float]:
         return await self._embed(text, task_type="RETRIEVAL_QUERY")
 
-    async def _embed(self, text: str, *, task_type:str) -> list[float]:
+    async def _embed(self, text: str, *, task_type: str) -> list[float]:
         try:
             response = await self._client.aio.models.embed_content(
                 model=EMBEDDING_MODEL,
