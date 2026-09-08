@@ -71,5 +71,7 @@ async def test_context_text_reaches_planner_path():
         fake_llm, "Rencanakan olahraga ringan", history=[], context_text=context
     )
 
+    assert result.plan_result is not None
+
     first_task_result = result.plan_result.executions[0].result
     assert "tone: formal" in first_task_result
