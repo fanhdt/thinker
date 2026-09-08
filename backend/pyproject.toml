@@ -11,6 +11,7 @@ dependencies = [
     "asyncpg>=0.31.0",
     "fastapi>=0.141.1",
     "google-genai>=2.21.0",
+    "httpx>=0.28.1",
     "pydantic-settings>=2.15.0",
     "pypdf>=6.17.0",
     "python-multipart>=0.0.32",
@@ -20,7 +21,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
+   
     "pyright>=1.1.411",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
