@@ -251,12 +251,13 @@ class LLMService:
             raise LLMServiceError(f"Gagal mengevaluasi hasil : {exc}") from exc
 
         evaluation = _as_structured(response, TaskEvaluation)
-        logger.warning(
-            "Gemini mengembalikan format evaluasi yang tak terduga, fallback ke is_correct=True"
-        )
+        
         if evaluation is None:
+            logger.warning(
+                "Gemini mengembalikan format evaluasi yang tak terduga, fallback ke is_correct=True"
+            )
             return TaskEvaluation(is_correct=True, feedback="")
-
+        
         return evaluation
 
     async def classify_message(self, message: str) -> bool:

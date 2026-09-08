@@ -1,4 +1,5 @@
 import asyncio
+
 import httpx
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
@@ -31,7 +32,9 @@ class TelegramClient:
         if offset is not None:
             params["offset"] = offset
 
-        response = await self._client.get(f"{self._base_url}/getUpdates", params=params, timeout=LONG_POLL_TIMEOUT_SECONDS + 10)
+        response = await self._client.get(f"{self._base_url}/getUpdates", 
+        params=params, 
+        timeout=LONG_POLL_TIMEOUT_SECONDS + 10)
         response.raise_for_status()
         data = response.json()
         return data["result"]
