@@ -23,7 +23,7 @@ class EmbeddingService:
     async def embed_query(self, text: str) -> list[float]:
         return await self._embed(text, task_type="RETRIEVAL_QUERY")
 
-    async def _embed(self, text: str, *, task_type=str) -> list[float]:
+    async def _embed(self, text: str, *, task_type:str) -> list[float]:
         try:
             response = await self._client.aio.models.embed_content(
                 model=EMBEDDING_MODEL,
@@ -36,7 +36,15 @@ class EmbeddingService:
         except APIError as exc:
             logger.error("Gemin embedding error: %s", exc)
             raise LLMServiceError(f"gagal membuat embedding :{exc}") from exc
-        return response.embeddings[0].values
+
+        embeddings = response.embeddings
+        if not embeddings:
+            raise LLMServiceError("Gemini mengembalikan embedding kosong (tidak ada embeddings)")
+
+        values = embeddings[0].values
+        if values is None:
+            raise LLMServiceError("Gemini mengembalikan embedding kosong (tidak ada embeddings)")
+        return values
 
 
 embedding_service = EmbeddingService()
