@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.observability import log_duration
 from app.models.conversation import Conversation
 from app.models.document_chunk import DocumentChunk
 from app.models.goal import Goal
@@ -67,6 +68,7 @@ def _build_context_instruction(
         )
 
 
+@log_duration("pipeline.process_incoming_message")
 async def process_incoming_message(
     session: AsyncSession,
     llm: MessagePipelineLLM,
@@ -87,7 +89,12 @@ async def process_incoming_message(
     menerjemahkannya jadi bahasa masing masing
     (503 untu HTTP, pesan error untuk telegram, dst)."""
 
-    await conversation_service.add_message(session, conversation.id, "user", message_text)
+    await conversation_service.add_message(
+        session, 
+        conversation.id, 
+        "user", 
+        message_text
+    )
 
     context_text = None
     try:
@@ -128,22 +135,31 @@ async def process_incoming_message(
         session, conversation.id, "assistant", orchestrated.reply
     )
 
+    extraction = None
     try:
         extraction = await llm.extract_fact(message_text)
         if extraction is not None and extraction.fact is not None:
             fact_embedding = await embedder.embed_document(extraction.fact)
 
             await memory_service.store_memory_if_new(
-                session,
-                conversation.user_id,
-                extraction.fact,
-                fact_embedding,
-                importance=extraction.importance,
+                    session,
+                    conversation.user_id,
+                    extraction.fact,
+                    fact_embedding,
+                    importance=extraction.importance,
             )
     except LLMServiceError as exc:
         logger.warning("gagal ekstraksi memori (non-fatal): %s", exc)
 
     await session.commit()
+
+    logger.info(
+        "op=pipeline.summary conversation_id=%s used_planner=%s memory_extracted=%s reply_len=%s",
+        conversation.id,
+        orchestrated.used_planner,
+        extraction is not None and extraction.fact is not None,
+        len(orchestrated.reply),
+    )
 
     return MessagePipelineResult(
         reply=orchestrated.reply,

@@ -1,9 +1,13 @@
+import logging
 from dataclasses import dataclass
 
+from app.core.logging_config import log_event
 from app.services.llm import Plan
 from app.services.llm_provider import PlannerLLM
 
 MAX_REFLECTION_ATTEMPTS = 2
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -38,6 +42,13 @@ async def _execute_task_with_reflection(
         evaluation = await llm.evaluate_result(task_description, result)
 
         if evaluation.is_correct:
+            log_event(
+                logger,
+                "task_execution_finished",
+                task=task_description,
+                passed_evaluation=True,
+                attempts=attempt,
+            )
             return TaskExecution(
                 description=task_description,
                 result=result,
@@ -46,6 +57,22 @@ async def _execute_task_with_reflection(
             )
 
         feedback = evaluation.feedback
+        log_event(
+            logger,
+            "reflection_retry",
+            task=task_description,
+            attempt=attempt,
+            max_attempts=total_attempts,
+            feedback=feedback,
+        )
+
+    log_event(
+        logger,
+        "task_execution_finished",
+        task=task_description,
+        passed_evaluation=False,
+        attempts=total_attempts,
+    )
 
     return TaskExecution(
         description=task_description,

@@ -1,7 +1,11 @@
+import logging
 from dataclasses import dataclass
 
+from app.core.logging_config import log_event
 from app.services.llm_provider import OrchestratorLLM
 from app.services.planner_service import PlanExecutionResult, build_summary_text, run_plan
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -22,6 +26,7 @@ async def handle_message(
     if needs_planning:
         execution_result = await run_plan(llm, message, personalization_context=context_text or "")
         summary = build_summary_text(execution_result)
+        log_event(logger, "message_handled", used_planner=True)
         return OrchestratedResponse(reply=summary, used_planner=True, plan_result=execution_result)
     reply = await llm.chat_with_history(history, system_instruction=context_text)
     return OrchestratedResponse(reply=reply, used_planner=False)

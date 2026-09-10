@@ -1,4 +1,5 @@
 import logging
+import time
 
 from google import genai
 from google.genai import types
@@ -6,11 +7,32 @@ from google.genai.errors import APIError
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.core.logging_config import log_event
 from app.services.tools.registry import AVAILABLE_TOOLS
 
 MAX_TOOL_CALLS_PER_REQUEST = 5
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_usage(response) -> dict[str, int]:
+    """Ambil token usage dari response Gemini secara defensif.
+
+    `usage_metadata` bisa saja tidak ada (mis. versi SDK berbeda, atau
+    response mock di test) -- observability tidak boleh sampai menjadi
+    penyebab request asli meledak, jadi field yang tidak ada cukup
+    di-skip, bukan raise.
+    """
+
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return {}
+    fields = {
+        "prompt_tokens": getattr(usage, "prompt_token_count", None),
+        "output_tokens": getattr(usage, "candidates_token_count", None),
+        "total_tokens": getattr(usage, "total_token_count", None),
+    }
+    return {k: v for k, v in fields.items() if v is not None}
 
 
 def _as_structured[T: BaseModel](response, model_cls: type[T]) -> T | None:
@@ -72,6 +94,50 @@ class LLMService:
     @property
     def model(self) -> str:
         return self._model
+
+    async def _generate(
+        self,
+        *,
+        method: str,
+        contents,
+        config: types.GenerateContentConfig | None = None,
+    ):
+        """Bungkus `generate_content` dengan timing + structured logging.
+
+        Satu tempat ini dipakai oleh ketujuh method publik di bawah supaya
+        tiap panggilan ke Gemini otomatis tercatat (durasi, sukses/gagal,
+        token usage kalau tersedia) tanpa menduplikasi try/except di
+        masing-masing method. `APIError` sengaja dilempar ulang apa adanya
+        (bukan dibungkus di sini) -- tiap method publik yang menentukan
+        pesan error & retryable-nya sendiri, sesuai perilaku yang sudah ada.
+        """
+        method_start = time.perf_counter()
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=self._model, contents=contents, config=config
+            )
+        except APIError as exc:
+            duration_ms = round((time.perf_counter() - method_start) * 1000, 1)
+            log_event(
+                logger,
+                "llm_call",
+                method=method,
+                duration_ms=duration_ms,
+                success=False,
+                error=str(exc),
+            )
+            raise
+
+        duration_ms = round((time.perf_counter() - method_start) * 1000, 1)
+        log_event(
+            logger,
+            "llm_call",
+            method=method,
+            duration_ms=duration_ms,
+            success=True,
+            **_extract_usage(response),
+        )
+        return response
 
     async def chat(self, message: str) -> str:
         try:
@@ -251,13 +317,13 @@ class LLMService:
             raise LLMServiceError(f"Gagal mengevaluasi hasil : {exc}") from exc
 
         evaluation = _as_structured(response, TaskEvaluation)
-        
+
         if evaluation is None:
             logger.warning(
                 "Gemini mengembalikan format evaluasi yang tak terduga, fallback ke is_correct=True"
             )
             return TaskEvaluation(is_correct=True, feedback="")
-        
+
         return evaluation
 
     async def classify_message(self, message: str) -> bool:
