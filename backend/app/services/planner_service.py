@@ -35,8 +35,8 @@ async def _execute_task_with_reflection(
         prompt_context = context_so_far
         if feedback:
             prompt_context += (
-                f"\n\nCatatan dari percobaan sebelumnya yang KURANG TEPAT"
-                f"{feedback}\nPerbaiki hasil sesuai catatan ini"
+                f"\n\nCatatan dari percobaan sebelumnya yang KURANG TEPAT: "
+                f"{feedback}\nPerbaiki hasil sesuai catatan ini."
             )
         result = await llm.execute_task(task_description, prompt_context)
         evaluation = await llm.evaluate_result(task_description, result)

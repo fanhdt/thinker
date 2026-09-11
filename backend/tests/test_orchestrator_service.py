@@ -75,3 +75,17 @@ async def test_context_text_reaches_planner_path():
 
     first_task_result = result.plan_result.executions[0].result
     assert "tone: formal" in first_task_result
+
+
+async def test_message_handled_logged_for_chat_branch_too(caplog):
+    """Regresi: sebelumnya event `message_handled` cuma di-log untuk jalur
+    planner, jadi jalur chat biasa (paling sering dipakai) tidak
+    terekam sama sekali di observability."""
+    fake_llm = FakeLLMService(needs_planning=False)
+
+    with caplog.at_level("INFO"):
+        await handle_message(fake_llm, "Halo", history=[], context_text=None)
+
+    messages = [record.message for record in caplog.records]
+    assert "message_handled" in messages
+    assert "planner_decision" in messages

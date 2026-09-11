@@ -89,12 +89,7 @@ async def process_incoming_message(
     menerjemahkannya jadi bahasa masing masing
     (503 untu HTTP, pesan error untuk telegram, dst)."""
 
-    await conversation_service.add_message(
-        session, 
-        conversation.id, 
-        "user", 
-        message_text
-    )
+    await conversation_service.add_message(session, conversation.id, "user", message_text)
 
     context_text = None
     try:
@@ -137,16 +132,22 @@ async def process_incoming_message(
 
     extraction = None
     try:
-        extraction = await llm.extract_fact(message_text)
-        if extraction is not None and extraction.fact is not None:
-            fact_embedding = await embedder.embed_document(extraction.fact)
+        all_memories = await memory_service.get_all_memories(session, conversation.user_id)
+        extraction = await llm.extract_fact(message_text, [m.content for m in all_memories])
+        if extraction is not None:
+            fact_embedding = None
+            if extraction.fact is not None:
+                fact_embedding = await embedder.embed_document(extraction.fact)
 
-            await memory_service.store_memory_if_new(
-                    session,
-                    conversation.user_id,
-                    extraction.fact,
-                    fact_embedding,
-                    importance=extraction.importance,
+            await memory_service.apply_extraction(
+                session,
+                conversation.user_id,
+                extraction.operation,
+                all_memories,
+                extraction.fact,
+                fact_embedding,
+                extraction.importance,
+                extraction.target_index,
             )
     except LLMServiceError as exc:
         logger.warning("gagal ekstraksi memori (non-fatal): %s", exc)
@@ -154,10 +155,10 @@ async def process_incoming_message(
     await session.commit()
 
     logger.info(
-        "op=pipeline.summary conversation_id=%s used_planner=%s memory_extracted=%s reply_len=%s",
+        "op=pipeline.summary conversation_id=%s used_planner=%s memory_operation=%s reply_len=%s",
         conversation.id,
         orchestrated.used_planner,
-        extraction is not None and extraction.fact is not None,
+        extraction.operation if extraction is not None else "NONE",
         len(orchestrated.reply),
     )
 

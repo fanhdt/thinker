@@ -53,7 +53,9 @@ class TelegramClient:
             except httpx.HTTPStatusError:
                 logger.error(
                     "sendMessage gagal untuk chat %s (status %s): %s",
-                    chat_id, response.status_code, response.text,
+                    chat_id,
+                    response.status_code,
+                    response.text,
                 )
                 raise
 

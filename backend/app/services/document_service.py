@@ -1,4 +1,5 @@
 import io
+import logging
 import uuid
 
 from pypdf import PdfReader
@@ -6,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.logging_config import log_event
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.services.similarity import cosine_similarity
@@ -15,6 +17,8 @@ CHUNK_OVERLAP = 200
 
 RETRIEVAL_THRESHOLD = 0.5
 MAX_RETRIEVED_CHUNKS = 5
+
+logger = logging.getLogger(__name__)
 
 
 def parse_text(raw_bytes: bytes, content_type: str) -> str:
@@ -87,7 +91,18 @@ async def retrieve_relevant_chunks(
     chunks = await get_all_chunks(session, user_id)
 
     scored = [(cosine_similarity(c.embedding, query_embedding), c) for c in chunks]
-    relevant = [(score, c) for score, c in scored if score >= RETRIEVAL_THRESHOLD]
-    relevant.sort(key=lambda pair: pair[0], reverse=True)
+    scored.sort(key=lambda pair: pair[0], reverse=True)
 
-    return [c for _, c in relevant[:MAX_RETRIEVED_CHUNKS]]
+    relevant = [(score, c) for score, c in scored if score >= RETRIEVAL_THRESHOLD]
+    result = [c for _, c in relevant[:MAX_RETRIEVED_CHUNKS]]
+
+    log_event(
+        logger,
+        "document_retrieval",
+        candidates=len(chunks),
+        threshold=RETRIEVAL_THRESHOLD,
+        returned=len(result),
+        top_scores=[round(score, 4) for score, _ in scored[:MAX_RETRIEVED_CHUNKS]],
+    )
+
+    return result

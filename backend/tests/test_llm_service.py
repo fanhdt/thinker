@@ -1,9 +1,10 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from google.genai import types
 from google.genai.errors import APIError
 
-from app.services.llm import LLMService, LLMServiceError
+from app.services.llm import LLMService, LLMServiceError, _extract_tool_calls
 
 
 def _build_service_with_fake_client(api_error: APIError) -> LLMService:
@@ -66,3 +67,30 @@ async def test_chat_raises_when_gemini_returns_empty_response():
 
     with pytest.raises(LLMServiceError):
         await service.chat("halo")
+
+
+def test_extract_tool_calls_returns_empty_list_when_no_history():
+    response = MagicMock(spec=[])  # tidak ada atribut apa pun, mirip response tanpa AFC
+    assert _extract_tool_calls(response) == []
+
+
+def test_extract_tool_calls_collects_function_call_names_in_order():
+    """Regresi tak langsung untuk Bagian 21 ('selected tools'): sebelumnya
+    tidak ada visibilitas sama sekali tool apa yang benar-benar dipanggil
+    Gemini lewat automatic function calling."""
+    history = [
+        types.Content(
+            role="model",
+            parts=[
+                types.Part(function_call=types.FunctionCall(name="calculator", args={})),
+                types.Part(text="hasil kalkulasi: 4"),
+            ],
+        ),
+        types.Content(
+            role="model",
+            parts=[types.Part(function_call=types.FunctionCall(name="datetime_now", args={}))],
+        ),
+    ]
+    response = MagicMock(automatic_function_calling_history=history)
+
+    assert _extract_tool_calls(response) == ["calculator", "datetime_now"]

@@ -34,7 +34,7 @@ class FakeLLMService:
     async def evaluate_result(self, task_description: str, result: str) -> TaskEvaluation:
         return TaskEvaluation(is_correct=True, feedback="")
 
-    async def extract_fact(self, message: str):
+    async def extract_fact(self, message: str, existing_memories: list[str]):
         return self.extraction
 
 
@@ -80,6 +80,12 @@ def _enter_pipeline_deps(stack: ExitStack, fake_user) -> None:
     stack.enter_context(
         patch(
             "app.services.message_pipeline.memory_service.retrieve_relevant_memories",
+            new=AsyncMock(return_value=[]),
+        )
+    )
+    stack.enter_context(
+        patch(
+            "app.services.message_pipeline.memory_service.get_all_memories",
             new=AsyncMock(return_value=[]),
         )
     )
@@ -137,8 +143,10 @@ async def test_retrieval_failure_is_non_fatal():
     assert result.reply == "balasan chat"
 
 
-async def test_memory_stored_when_fact_extracted():
-    extraction = MagicMock(fact="User suka kopi tanpa gula", importance=4)
+async def test_memory_created_when_fact_extracted():
+    extraction = MagicMock(
+        operation="CREATE", fact="User suka kopi tanpa gula", importance=4, target_index=None
+    )
     fake_llm = FakeLLMService(needs_planning=False, extraction=extraction)
     fake_embedder = MagicMock()
     fake_embedder.embed_query = AsyncMock(return_value=[0.1])
@@ -149,9 +157,9 @@ async def test_memory_stored_when_fact_extracted():
 
     with ExitStack() as stack:
         _enter_pipeline_deps(stack, fake_user)
-        mock_store = stack.enter_context(
+        mock_apply = stack.enter_context(
             patch(
-                "app.services.message_pipeline.memory_service.store_memory_if_new",
+                "app.services.message_pipeline.memory_service.apply_extraction",
                 new=AsyncMock(),
             )
         )
@@ -160,8 +168,51 @@ async def test_memory_stored_when_fact_extracted():
         )
 
     fake_embedder.embed_document.assert_called_once_with("User suka kopi tanpa gula")
-    mock_store.assert_called_once_with(
-        fake_session, conversation.user_id, "User suka kopi tanpa gula", [0.2], importance=4
+    mock_apply.assert_called_once_with(
+        fake_session,
+        conversation.user_id,
+        "CREATE",
+        [],
+        "User suka kopi tanpa gula",
+        [0.2],
+        4,
+        None,
+    )
+
+
+async def test_memory_deleted_when_forget_requested():
+    """`target_index` merujuk ke memory existing -- fact tidak perlu di-embed."""
+    existing = MagicMock(content="User suka kopi")
+    extraction = MagicMock(operation="DELETE", fact=None, importance=3, target_index=0)
+    fake_llm = FakeLLMService(needs_planning=False, extraction=extraction)
+    fake_embedder = MagicMock()
+    fake_embedder.embed_query = AsyncMock(return_value=[0.1])
+    fake_embedder.embed_document = AsyncMock()
+    fake_session = FakeSession()
+    fake_user = MagicMock(preferences={})
+    conversation = _fake_conversation()
+
+    with ExitStack() as stack:
+        _enter_pipeline_deps(stack, fake_user)
+        stack.enter_context(
+            patch(
+                "app.services.message_pipeline.memory_service.get_all_memories",
+                new=AsyncMock(return_value=[existing]),
+            )
+        )
+        mock_apply = stack.enter_context(
+            patch(
+                "app.services.message_pipeline.memory_service.apply_extraction",
+                new=AsyncMock(),
+            )
+        )
+        await process_incoming_message(
+            fake_session, fake_llm, fake_embedder, conversation, "Lupakan bahwa aku suka kopi"
+        )
+
+    fake_embedder.embed_document.assert_not_called()
+    mock_apply.assert_called_once_with(
+        fake_session, conversation.user_id, "DELETE", [existing], None, None, 3, 0
     )
 
 
@@ -175,9 +226,9 @@ async def test_memory_skipped_when_no_fact_extracted():
 
     with ExitStack() as stack:
         _enter_pipeline_deps(stack, fake_user)
-        mock_store = stack.enter_context(
+        mock_apply = stack.enter_context(
             patch(
-                "app.services.message_pipeline.memory_service.store_memory_if_new",
+                "app.services.message_pipeline.memory_service.apply_extraction",
                 new=AsyncMock(),
             )
         )
@@ -185,7 +236,7 @@ async def test_memory_skipped_when_no_fact_extracted():
             fake_session, fake_llm, fake_embedder, conversation, "Apa kabar?"
         )
 
-    mock_store.assert_not_called()
+    mock_apply.assert_not_called()
 
 
 async def test_planner_branch_returns_plan_result():

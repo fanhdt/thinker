@@ -22,11 +22,14 @@ async def handle_message(
     context_text: str | None,
 ) -> OrchestratedResponse:
     needs_planning = await llm.classify_message(message)
+    log_event(logger, "planner_decision", needs_planning=needs_planning)
 
     if needs_planning:
         execution_result = await run_plan(llm, message, personalization_context=context_text or "")
         summary = build_summary_text(execution_result)
         log_event(logger, "message_handled", used_planner=True)
         return OrchestratedResponse(reply=summary, used_planner=True, plan_result=execution_result)
+
     reply = await llm.chat_with_history(history, system_instruction=context_text)
+    log_event(logger, "message_handled", used_planner=False)
     return OrchestratedResponse(reply=reply, used_planner=False)

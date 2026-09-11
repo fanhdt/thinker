@@ -68,7 +68,7 @@ async def request_context_middleware(request: Request, call_next):
         duration_ms = round((time.perf_counter() - start) * 1000, 1)
         log_event(
             logger,
-            "request_failed",
+            "request_completed",
             method=request.method,
             path=request.url.path,
             status_code=response.status_code,

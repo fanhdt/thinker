@@ -61,7 +61,8 @@ async def run_bot() -> None:
                 updates = await client.get_updates(offset)
             except Exception as exc:  # noqa: BLE001 -- jaring pengaman loop, sengaja luas
                 logger.error(
-                    "Gagal getUpdates, retry dalam %ss: %s", POLL_ERROR_BACKOFF_SECONDS, exc)
+                    "Gagal getUpdates, retry dalam %ss: %s", POLL_ERROR_BACKOFF_SECONDS, exc
+                )
                 await asyncio.sleep(POLL_ERROR_BACKOFF_SECONDS)
                 continue
 

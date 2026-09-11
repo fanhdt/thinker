@@ -11,31 +11,30 @@ request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 
 
 class JsonFormatter(logging.Formatter):
-    """Format tiap baris log sebagai satu objek JSON./
-    kenapa JSON, bukan format teks seperti sebelumnya:
-    supaya log bisa di-grep/parse terstrktur
-    (mis. filter semua event `llm_call` yang
-    `duration_ms > 1000`), Tetap ditulis ke stdout,
-    bukan ke sistem observability ekstrnal --
-    itu abstraksi yang belum dibutuhkan
-    untuk single user MVP"""
+    """Format tiap baris log sebagai satu objek JSON.
 
+    Kenapa JSON, bukan format teks seperti sebelumnya: supaya log bisa
+    di-grep/parse terstruktur (mis. filter semua event `llm_call` yang
+    `duration_ms > 1000`). Tetap ditulis ke stdout, bukan ke sistem
+    observability eksternal -- itu abstraksi yang belum dibutuhkan untuk
+    single user MVP.
+    """
 
-def format(self, record: logging.LogRecord) -> str:
-    payload: dict[str, Any] = {
-        "timestamp": datetime.now(UTC).isoformat(),
-        "level": record.levelname,
-        "logger": record.name,
-        "message": record.getMessage(),
-        "request_id": request_id_var.get(),
-    }
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, Any] = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "request_id": request_id_var.get(),
+        }
 
-    event_data = getattr(record, "event_data", None)
-    if event_data:
-        payload["data"] = event_data
-    if record.exc_info:
-        payload["exc_info"] = self.formatException(record.exc_info)
-    return json.dumps(payload, default=str)
+        event_data = getattr(record, "event_data", None)
+        if event_data:
+            payload["data"] = event_data
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(payload, default=str)
 
 
 def configure_logging() -> None:

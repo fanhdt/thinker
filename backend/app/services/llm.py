@@ -1,5 +1,6 @@
 import logging
 import time
+from typing import Literal
 
 from google import genai
 from google.genai import types
@@ -52,10 +53,56 @@ def _as_structured[T: BaseModel](response, model_cls: type[T]) -> T | None:
     return parsed if isinstance(parsed, model_cls) else None
 
 
+def _extract_tool_calls(response) -> list[str]:
+    """Ambil nama tool yang dipanggil Gemini melalui automatic function calling.
+
+    Gemini menyimpan riwayat automatic function calling pada
+    `automatic_function_calling_history`.
+
+    Mengembalikan nama function/tool sesuai urutan pemanggilannya.
+    Kalau history tidak tersedia atau tidak ada function call, mengembalikan [].
+    """
+    tool_calls: list[str] = []
+
+    history = getattr(response, "automatic_function_calling_history", None) or []
+
+    for content in history:
+        parts = getattr(content, "parts", None) or []
+
+        for part in parts:
+            function_call = getattr(part, "function_call", None)
+
+            if function_call is None:
+                continue
+
+            name = getattr(function_call, "name", None)
+
+            if name:
+                tool_calls.append(name)
+
+    return tool_calls
+
+
 class MemoryExtraction(BaseModel):
-    has_memory: bool
+    """Hasil analisis satu pesan user terhadap memory yang sudah tersimpan.
+
+    `operation` menentukan apa yang harus dilakukan `memory_service`:
+    - CREATE: `fact` (+ `importance`) baru, tidak berkaitan dengan memory lama.
+    - UPDATE: `fact` (+ `importance`) baru menggantikan memory di `target_index`
+      (mis. preferensi yang berubah).
+    - DELETE: hapus memory di `target_index` (user minta dilupakan), `fact`
+      tidak dipakai.
+    - IGNORE: tidak ada fakta personal yang layak diingat/diubah.
+
+    `target_index` WAJIB diisi untuk UPDATE/DELETE (index ke daftar
+    existing memories yang dikirim ke prompt), dan diabaikan untuk
+    CREATE/IGNORE.
+    """
+
+    operation: Literal["CREATE", "UPDATE", "DELETE", "IGNORE"]
     fact: str | None = None
     importance: int = 3
+    target_index: int | None = None
 
 
 class PlanTask(BaseModel):
@@ -141,10 +188,7 @@ class LLMService:
 
     async def chat(self, message: str) -> str:
         try:
-            response = await self._client.aio.models.generate_content(
-                model=self._model,
-                contents=message,
-            )
+            response = await self._generate(method="chat", contents=message)
         except APIError as exc:
             logger.error("Gemini API error: %s", exc)
             retryable = exc.code in (429, 503)
@@ -174,10 +218,8 @@ class LLMService:
             ),
         )
         try:
-            response = await self._client.aio.models.generate_content(
-                model=self._model,
-                contents=contents,
-                config=config,
+            response = await self._generate(
+                method="chat_with_history", contents=contents, config=config
             )
         except APIError as exc:
             logger.error("Gemini API error: %s", exc)
@@ -189,25 +231,44 @@ class LLMService:
 
         return response.text
 
-    async def extract_fact(self, message: str) -> MemoryExtraction | None:
+    async def extract_fact(
+        self, message: str, existing_memories: list[str]
+    ) -> MemoryExtraction | None:
+        if existing_memories:
+            memories_block = "\n".join(
+                f"[{i}] {content}" for i, content in enumerate(existing_memories)
+            )
+        else:
+            memories_block = "(belum ada memory tersimpan)"
+
         prompt = (
-            "Analisis pesan berikut dari user sebuah asisten AI personal.\n"
-            "Apakah pesan ini mengandung FAKTA PERSONAL yang layak diingat "
-            "jangka panjang (preferensi, kondisi kesehatan, pekerjaan, "
-            "hubungan, kebiasaan, dsb)? Pertanyaan biasa atau basa-basi "
-            "BUKAN fakta yang perlu diingat.\n\n"
-            f'Pesan: "{message}"\n\n'
-            "Kalau ADA fakta, tulis ulang sebagai satu kalimat singkat & "
-            'netral berperspektif orang ketiga (mis. "User alergi kacang."), '
-            "bukan mengutip mentah. Beri juga `importance` (1 - 5):"
-            "5 = Sangat penting/menyangkut keselamatan dan kesehatan"
-            "(mis. alergi, kondisi medis), 3 = preferensi biasa"
-            "(mis. makanan favorit), 1 = detail remeh"
+            "Analisis pesan berikut dari user sebuah asisten AI personal, "
+            "dibandingkan dengan memory jangka panjang yang SUDAH tersimpan "
+            "tentang user ini.\n\n"
+            f"Memory yang sudah tersimpan (dengan index):\n{memories_block}\n\n"
+            f'Pesan baru dari user: "{message}"\n\n'
+            "Tentukan SATU `operation` yang paling tepat:\n"
+            "- CREATE: pesan mengandung fakta personal baru (preferensi, "
+            "kondisi kesehatan, pekerjaan, hubungan, kebiasaan, dsb) yang "
+            "TIDAK bertentangan/berkaitan dengan memory manapun di atas.\n"
+            "- UPDATE: pesan mengubah/menggantikan salah satu memory di atas "
+            "(mis. preferensi yang berubah). Sebutkan `target_index`-nya.\n"
+            "- DELETE: user secara eksplisit minta suatu fakta dilupakan/"
+            "dihapus. Sebutkan `target_index`-nya.\n"
+            "- IGNORE: pertanyaan biasa, basa-basi, atau tidak ada fakta "
+            "personal yang layak diingat/diubah.\n\n"
+            "Untuk CREATE/UPDATE, isi juga `fact`: tulis ulang sebagai satu "
+            'kalimat singkat & netral berperspektif orang ketiga (mis. "User '
+            'alergi kacang."), bukan mengutip mentah. Beri juga `importance` '
+            "(1-5): 5 = sangat penting/menyangkut keselamatan & kesehatan "
+            "(mis. alergi, kondisi medis), 3 = preferensi biasa (mis. "
+            "makanan favorit), 1 = detail remeh.\n"
+            "Untuk DELETE/IGNORE, `fact` tidak perlu diisi."
         )
 
         try:
-            response = await self._client.aio.models.generate_content(
-                model=self._model,
+            response = await self._generate(
+                method="extract_fact",
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -222,9 +283,28 @@ class LLMService:
         if result is None:
             logger.warning("Gemini mengembalikan format ekstraksi memori yang tidak terduga")
             return None
-        if result.has_memory and result.fact:
-            return result
-        return None
+
+        if result.operation in ("UPDATE", "DELETE"):
+            valid_index = result.target_index is not None and 0 <= result.target_index < len(
+                existing_memories
+            )
+            if not valid_index:
+                logger.warning(
+                    "Gemini minta %s dengan target_index tidak valid (%s dari %d memory) "
+                    "-- diperlakukan sebagai IGNORE",
+                    result.operation,
+                    result.target_index,
+                    len(existing_memories),
+                )
+                return None
+
+        if result.operation == "CREATE" and not result.fact:
+            return None
+
+        if result.operation == "IGNORE":
+            return None
+
+        return result
 
     async def create_plan(self, goal: str) -> Plan:
         prompt = (
@@ -241,8 +321,8 @@ class LLMService:
         )
 
         try:
-            response = await self._client.aio.models.generate_content(
-                model=self._model,
+            response = await self._generate(
+                method="create_plan",
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -273,11 +353,7 @@ class LLMService:
         )
 
         try:
-            response = await self._client.aio.models.generate_content(
-                model=self._model,
-                contents=prompt,
-                config=config,
-            )
+            response = await self._generate(method="execute_task", contents=prompt, config=config)
         except APIError as exc:
             logger.error("Gemini task execution error : %s", exc)
             retryable = exc.code in (429, 503)
@@ -304,8 +380,8 @@ class LLMService:
         )
 
         try:
-            response = await self._client.aio.models.generate_content(
-                model=self._model,
+            response = await self._generate(
+                method="evaluate_result",
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -342,8 +418,8 @@ class LLMService:
         )
 
         try:
-            response = await self._client.aio.models.generate_content(
-                model=self._model,
+            response = await self._generate(
+                method="classify_message",
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
