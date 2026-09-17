@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.logging_config import log_event
 from app.core.observability import log_duration
 from app.models.conversation import Conversation
 from app.models.document_chunk import DocumentChunk
@@ -154,12 +155,13 @@ async def process_incoming_message(
 
     await session.commit()
 
-    logger.info(
-        "op=pipeline.summary conversation_id=%s used_planner=%s memory_operation=%s reply_len=%s",
-        conversation.id,
-        orchestrated.used_planner,
-        extraction.operation if extraction is not None else "NONE",
-        len(orchestrated.reply),
+    log_event(
+        logger,
+        "pipeline_summary",
+        conversation_id=str(conversation.id),
+        used_planner=orchestrated.used_planner,
+        memory_operation=extraction.operation if extraction is not None else "NONE",
+        reply_len=len(orchestrated.reply),
     )
 
     return MessagePipelineResult(

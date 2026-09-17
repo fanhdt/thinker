@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.llm import LLMServiceError, Plan, PlanTask, TaskEvaluation
+from app.services.llm import LLMServiceError, MessagePlan, Plan, PlanTask, TaskOutcome
 from app.services.message_pipeline import process_incoming_message
 
 
@@ -19,8 +19,9 @@ class FakeLLMService:
         self.extraction = extraction
         self.model = "fake-model"
 
-    async def classify_message(self, message: str) -> bool:
-        return self.needs_planning
+    async def classify_and_plan(self, message: str) -> MessagePlan:
+        tasks = [PlanTask(description="Task 1")] if self.needs_planning else []
+        return MessagePlan(needs_planning=self.needs_planning, tasks=tasks)
 
     async def chat_with_history(self, history, *, system_instruction=None) -> str:
         return "balasan chat"
@@ -28,11 +29,8 @@ class FakeLLMService:
     async def create_plan(self, goal: str) -> Plan:
         return Plan(goal=goal, tasks=[PlanTask(description="Task 1")])
 
-    async def execute_task(self, task_description: str, prior_context: str) -> str:
-        return f"hasil dari {task_description}"
-
-    async def evaluate_result(self, task_description: str, result: str) -> TaskEvaluation:
-        return TaskEvaluation(is_correct=True, feedback="")
+    async def execute_and_evaluate(self, task_description: str, prior_context: str) -> TaskOutcome:
+        return TaskOutcome(result=f"hasil dari {task_description}", is_correct=True, feedback="")
 
     async def extract_fact(self, message: str, existing_memories: list[str]):
         return self.extraction

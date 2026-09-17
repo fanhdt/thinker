@@ -1,4 +1,4 @@
-from app.services.llm import Plan, PlanTask, TaskEvaluation
+from app.services.llm import Plan, PlanTask, TaskOutcome
 from app.services.planner_service import MAX_REFLECTION_ATTEMPTS, build_summary_text, run_plan
 
 
@@ -7,7 +7,6 @@ class FakeLLMService:
         self.evaluation_pattern = evaluation_pattern or [True]
         self.num_tasks = num_tasks
         self.execute_call_count = 0
-        self.evaluate_call_count = 0
         self.received_contexts: list[str] = []
 
     async def create_plan(self, goal: str) -> Plan:
@@ -16,19 +15,23 @@ class FakeLLMService:
             tasks=[PlanTask(description=f"Task {i + 1}") for i in range(self.num_tasks)],
         )
 
-    async def execute_task(self, task_description: str, prior_context: str) -> str:
-        self.execute_call_count += 1
-        self.received_contexts.append(prior_context)
-        return f"Hasil percobaan ke-{self.execute_call_count} untuk {task_description}"
-
-    async def evaluate_result(self, task_description: str, result: str) -> TaskEvaluation:
-        index = min(self.evaluate_call_count, len(self.evaluation_pattern) - 1)
+    async def execute_and_evaluate(self, task_description: str, prior_context: str) -> TaskOutcome:
+        """Gabungan execute+evaluate dalam satu panggilan (lihat
+        `LLMService.execute_and_evaluate`) -- fake ini melacak jumlah
+        panggilan di `execute_call_count` seperti sebelumnya, tapi sekarang
+        cuma SATU counter untuk kedua hal (dulu ada execute_call_count DAN
+        evaluate_call_count terpisah, sekarang memang satu panggilan)."""
+        index = min(self.execute_call_count, len(self.evaluation_pattern) - 1)
         is_correct = self.evaluation_pattern[index]
-        self.evaluate_call_count += 1
+        self.received_contexts.append(prior_context)
+        self.execute_call_count += 1
 
+        result = f"Hasil percobaan ke-{self.execute_call_count} untuk {task_description}"
         if is_correct:
-            return TaskEvaluation(is_correct=True, feedback="")
-        return TaskEvaluation(is_correct=False, feedback="Kurang detail, tolong perbaiki.")
+            return TaskOutcome(result=result, is_correct=True, feedback="")
+        return TaskOutcome(
+            result=result, is_correct=False, feedback="Kurang detail, tolong perbaiki."
+        )
 
 
 async def test_task_passes_on_first_attempt_needs_no_retry():
@@ -103,3 +106,22 @@ async def test_empty_personalization_context_does_not_break_run_plan():
     execution_result = await run_plan(fake_llm, "Goal contoh", personalization_context="")
 
     assert execution_result.executions[0].passed_evaluation is True
+
+
+async def test_run_plan_uses_provided_plan_without_calling_create_plan():
+    """Regresi: kalau orchestrator sudah dapat plan dari classify_and_plan,
+    run_plan TIDAK boleh manggil create_plan lagi (itu akan jadi panggilan
+    Gemini kedua yang mubazir -- justru pemborosan yang barusan kita benahi)."""
+
+    class FakeLLMNoCreatePlan(FakeLLMService):
+        async def create_plan(self, goal: str) -> Plan:
+            raise AssertionError(
+                "create_plan tidak seharusnya terpanggil kalau plan sudah diberikan"
+            )
+
+    fake_llm = FakeLLMNoCreatePlan(evaluation_pattern=[True])
+    given_plan = Plan(goal="Goal contoh", tasks=[PlanTask(description="Task dari luar")])
+
+    execution_result = await run_plan(fake_llm, "Goal contoh", plan=given_plan)
+
+    assert execution_result.executions[0].description == "Task dari luar"

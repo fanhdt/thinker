@@ -1,4 +1,4 @@
-from app.services.llm import Plan, PlanTask, TaskEvaluation
+from app.services.llm import MessagePlan, PlanTask, TaskOutcome
 from app.services.orchestrator_service import handle_message
 
 
@@ -6,10 +6,12 @@ class FakeLLMService:
     def __init__(self, needs_planning: bool):
         self.needs_planning = needs_planning
         self.chat_with_history_calls: list[dict] = []
-        self.run_plan_calls: list[dict] = []
+        self.classify_and_plan_calls: list[dict] = []
 
-    async def classify_message(self, message: str) -> bool:
-        return self.needs_planning
+    async def classify_and_plan(self, message: str) -> MessagePlan:
+        self.classify_and_plan_calls.append({"message": message})
+        tasks = [PlanTask(description="Satu task saja")] if self.needs_planning else []
+        return MessagePlan(needs_planning=self.needs_planning, tasks=tasks)
 
     async def chat_with_history(
         self, history: list[dict[str, str]], *, system_instruction: str | None = None
@@ -19,15 +21,19 @@ class FakeLLMService:
         )
         return "balasan chat biasa"
 
-    async def create_plan(self, goal: str) -> Plan:
-        self.run_plan_calls.append({"goal": goal})
-        return Plan(goal=goal, tasks=[PlanTask(description="Satu task saja")])
+    async def create_plan(self, goal: str):
+        # Orchestrator sekarang selalu mengoper plan langsung dari
+        # classify_and_plan ke run_plan(), jadi create_plan TIDAK seharusnya
+        # pernah terpanggil lewat jalur ini -- kalau terpanggil, berarti ada
+        # regresi (plan dibuat dua kali, dua kali biaya panggilan Gemini).
+        raise AssertionError("create_plan tidak seharusnya terpanggil lewat orchestrator")
 
-    async def execute_task(self, task_description: str, prior_context: str) -> str:
-        return f"hasil dari {task_description} (konteks: {prior_context!r})"
-
-    async def evaluate_result(self, task_description: str, result: str) -> TaskEvaluation:
-        return TaskEvaluation(is_correct=True, feedback="")
+    async def execute_and_evaluate(self, task_description: str, prior_context: str) -> TaskOutcome:
+        return TaskOutcome(
+            result=f"hasil dari {task_description} (konteks: {prior_context!r})",
+            is_correct=True,
+            feedback="",
+        )
 
 
 async def test_simple_message_uses_chat_not_planner():
@@ -38,7 +44,6 @@ async def test_simple_message_uses_chat_not_planner():
     assert result.plan_result is None
     assert result.reply == "balasan chat biasa"
     assert len(fake_llm.chat_with_history_calls) == 1
-    assert len(fake_llm.run_plan_calls) == 0
 
 
 async def test_complex_goal_uses_planner_not_chat():
@@ -50,7 +55,7 @@ async def test_complex_goal_uses_planner_not_chat():
     assert result.used_planner is True
     assert result.plan_result is not None
     assert len(result.plan_result.executions) == 1
-    assert len(fake_llm.run_plan_calls) == 1
+    assert len(fake_llm.classify_and_plan_calls) == 1
     assert len(fake_llm.chat_with_history_calls) == 0
 
 

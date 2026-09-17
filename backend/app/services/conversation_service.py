@@ -7,6 +7,13 @@ from app.models import Conversation, Message, User
 
 DEFAULT_USER_NAME = "Anda"
 
+# Jumlah pesan terakhir yang dikirim sebagai konteks ke LLM (`chat_with_history`).
+# `get_messages` (dipakai API buat nampilin riwayat ke user) TIDAK dibatasi --
+# ini cuma soal apa yang dikirim ke Gemini, bukan apa yang disimpan/ditampilkan.
+# Tanpa batas ini, prompt_tokens membesar linear seiring panjang percakapan
+# dan akhirnya bisa melebihi context window model.
+MAX_HISTORY_MESSAGES_FOR_LLM = 20
+
 
 async def get_or_create_default_user(session: AsyncSession) -> User:
     result = await session.execute(select(User).limit(1))
@@ -66,6 +73,29 @@ async def get_messages(session: AsyncSession, conversation_id: uuid.UUID) -> lis
     )
 
     return list(result.scalars().all())
+
+
+async def get_recent_messages_for_llm(
+    session: AsyncSession,
+    conversation_id: uuid.UUID,
+    limit: int = MAX_HISTORY_MESSAGES_FOR_LLM,
+) -> list[Message]:
+    """Ambil `limit` pesan TERAKHIR dari conversation, urut kronologis (lama -> baru).
+
+    Khusus buat dikirim sebagai history ke `chat_with_history` -- supaya
+    prompt_tokens tidak membesar tanpa batas seiring panjangnya percakapan.
+    Riwayat lengkap tetap tersimpan utuh di database dan tetap bisa diambil
+    lewat `get_messages` (mis. buat API yang nampilin riwayat ke user).
+    """
+    result = await session.execute(
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at.desc())
+        .limit(limit)
+    )
+    recent = list(result.scalars().all())
+    recent.reverse()
+    return recent
 
 
 async def add_message(

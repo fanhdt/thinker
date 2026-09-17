@@ -1,86 +1,29 @@
+"""Logika bisnis LLM Thinker -- Bagian 18 master prompt: Model-Agnostic
+Architecture.
+
+File ini SENGAJA tidak boleh import `google.genai` atau `openai` sama
+sekali. Semua yang provider-spesifik (bentuk request, cara error dipetakan,
+cara tool-calling dijalankan) hidup di `app/services/llm_providers/`.
+`LLMService` di sini cuma menyusun prompt, memilih schema Pydantic, dan
+memanggil `self._simple_provider.generate(...)` atau
+`self._planner_provider.generate(...)` -- provider mana yang sebenarnya
+dipakai per tier (Gemini, OpenAI, Groq, DeepSeek, atau rantai failover
+di antaranya) ditentukan oleh `llm_providers.factory` berdasarkan config,
+bukan oleh kode di sini. Tier "simple" (chat, routing, ekstraksi memori)
+vs "planner" (pembuatan & eksekusi task) boleh diarahkan ke provider
+berbeda -- lihat `build_simple_provider`/`build_planner_provider`.
+"""
+
 import logging
-import time
 from typing import Literal
 
-from google import genai
-from google.genai import types
-from google.genai.errors import APIError
 from pydantic import BaseModel
 
-from app.core.config import settings
 from app.core.logging_config import log_event
-from app.services.tools.registry import AVAILABLE_TOOLS
-
-MAX_TOOL_CALLS_PER_REQUEST = 5
+from app.services.llm_providers.base import LLMProvider, ProviderError
+from app.services.llm_providers.factory import build_planner_provider, build_simple_provider
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_usage(response) -> dict[str, int]:
-    """Ambil token usage dari response Gemini secara defensif.
-
-    `usage_metadata` bisa saja tidak ada (mis. versi SDK berbeda, atau
-    response mock di test) -- observability tidak boleh sampai menjadi
-    penyebab request asli meledak, jadi field yang tidak ada cukup
-    di-skip, bukan raise.
-    """
-
-    usage = getattr(response, "usage_metadata", None)
-    if usage is None:
-        return {}
-    fields = {
-        "prompt_tokens": getattr(usage, "prompt_token_count", None),
-        "output_tokens": getattr(usage, "candidates_token_count", None),
-        "total_tokens": getattr(usage, "total_token_count", None),
-    }
-    return {k: v for k, v in fields.items() if v is not None}
-
-
-def _as_structured[T: BaseModel](response, model_cls: type[T]) -> T | None:
-    """Validasi tipe `response.parsed` dari gemini secara eksplisit .
-    SDK mengetik `respon.parsed` secara generik (`BaseModel | Dict | Enum | None`)
-    karena dia tidak tau skema spesifik yang kita minta
-    lewat `response_schema` .
-    Mengklaim tipenya lewat anotasi variabel saja
-    (mis. `plan:Plan | None = response.parsed`)
-    TIDAK memvalidasi apapun secara runtime --
-    kalau gemini pernah mengembalikan bentuk yang tak terduga
-    kode akan lanjut jalan dengan asumsi tipe yang salah,
-    lalu meledak entah dimana di hilir.
-    Fungsi ini memastikan validasi itu benar benar terjadi di satu tempat.
-    """
-    parsed = response.parsed
-    return parsed if isinstance(parsed, model_cls) else None
-
-
-def _extract_tool_calls(response) -> list[str]:
-    """Ambil nama tool yang dipanggil Gemini melalui automatic function calling.
-
-    Gemini menyimpan riwayat automatic function calling pada
-    `automatic_function_calling_history`.
-
-    Mengembalikan nama function/tool sesuai urutan pemanggilannya.
-    Kalau history tidak tersedia atau tidak ada function call, mengembalikan [].
-    """
-    tool_calls: list[str] = []
-
-    history = getattr(response, "automatic_function_calling_history", None) or []
-
-    for content in history:
-        parts = getattr(content, "parts", None) or []
-
-        for part in parts:
-            function_call = getattr(part, "function_call", None)
-
-            if function_call is None:
-                continue
-
-            name = getattr(function_call, "name", None)
-
-            if name:
-                tool_calls.append(name)
-
-    return tool_calls
 
 
 class MemoryExtraction(BaseModel):
@@ -118,13 +61,28 @@ class Plan(BaseModel):
     tasks: list[PlanTask]
 
 
-class TaskEvaluation(BaseModel):
+class TaskOutcome(BaseModel):
+    """Hasil `execute_and_evaluate`: mengerjakan task DAN mengevaluasi
+    hasilnya sendiri dalam SATU panggilan LLM -- dulu ini 2 panggilan
+    terpisah (`execute_task` + `evaluate_result`). Menghemat separuh
+    panggilan LLM di reflection loop.
+    """
+
+    result: str
     is_correct: bool
     feedback: str = ""
 
 
-class MessageRoute(BaseModel):
+class MessagePlan(BaseModel):
+    """Hasil `classify_and_plan`: menentukan needs_planning DAN (kalau true)
+    langsung membuat task-tasknya, dalam SATU panggilan -- dulu ini 2
+    panggilan terpisah (`classify_message` + `create_plan`).
+
+    `tasks` dikosongkan kalau `needs_planning=False`.
+    """
+
     needs_planning: bool
+    tasks: list[PlanTask] = []
 
 
 class LLMServiceError(Exception):
@@ -134,102 +92,68 @@ class LLMServiceError(Exception):
 
 
 class LLMService:
-    def __init__(self) -> None:
-        self._client = genai.Client(api_key=settings.gemini_api_key)
-        self._model = settings.gemini_model
+    def __init__(
+        self,
+        provider: LLMProvider | None = None,
+        *,
+        simple_provider: LLMProvider | None = None,
+        planner_provider: LLMProvider | None = None,
+    ) -> None:
+        """`provider`: suntik SATU provider dipakai untuk semua tier (dipakai
+        test lama & kasus tanpa tiering). `simple_provider`/`planner_provider`:
+        suntik provider berbeda per tier secara eksplisit (dipakai test
+        tiering). Kalau semuanya None, masing-masing tier dibangun dari
+        config lewat factory -- lihat `build_simple_provider`/
+        `build_planner_provider` untuk aturan fallback-nya.
+        """
+        if provider is not None:
+            self._simple_provider = provider
+            self._planner_provider = provider
+        else:
+            self._simple_provider = (
+                simple_provider if simple_provider is not None else build_simple_provider()
+            )
+            self._planner_provider = (
+                planner_provider if planner_provider is not None else build_planner_provider()
+            )
 
     @property
     def model(self) -> str:
-        return self._model
+        return self._simple_provider.model
 
-    async def _generate(
-        self,
-        *,
-        method: str,
-        contents,
-        config: types.GenerateContentConfig | None = None,
-    ):
-        """Bungkus `generate_content` dengan timing + structured logging.
-
-        Satu tempat ini dipakai oleh ketujuh method publik di bawah supaya
-        tiap panggilan ke Gemini otomatis tercatat (durasi, sukses/gagal,
-        token usage kalau tersedia) tanpa menduplikasi try/except di
-        masing-masing method. `APIError` sengaja dilempar ulang apa adanya
-        (bukan dibungkus di sini) -- tiap method publik yang menentukan
-        pesan error & retryable-nya sendiri, sesuai perilaku yang sudah ada.
-        """
-        method_start = time.perf_counter()
-        try:
-            response = await self._client.aio.models.generate_content(
-                model=self._model, contents=contents, config=config
-            )
-        except APIError as exc:
-            duration_ms = round((time.perf_counter() - method_start) * 1000, 1)
-            log_event(
-                logger,
-                "llm_call",
-                method=method,
-                duration_ms=duration_ms,
-                success=False,
-                error=str(exc),
-            )
-            raise
-
-        duration_ms = round((time.perf_counter() - method_start) * 1000, 1)
-        log_event(
-            logger,
-            "llm_call",
-            method=method,
-            duration_ms=duration_ms,
-            success=True,
-            **_extract_usage(response),
-        )
-        return response
+    @property
+    def planner_model(self) -> str:
+        return self._planner_provider.model
 
     async def chat(self, message: str) -> str:
         try:
-            response = await self._generate(method="chat", contents=message)
-        except APIError as exc:
-            logger.error("Gemini API error: %s", exc)
-            retryable = exc.code in (429, 503)
-            raise LLMServiceError(f"Gagal menghubungi gemini:{exc}", retryable=retryable) from exc
+            outcome = await self._simple_provider.generate(
+                [{"role": "user", "content": message}]
+            )
+        except ProviderError as exc:
+            logger.error("Provider error: %s", exc)
+            raise LLMServiceError(f"Gagal menghubungi LLM:{exc}", retryable=exc.retryable) from exc
 
-        if not response.text:
-            raise LLMServiceError("Gemini mengembalikan response kosong")
+        if not outcome.text:
+            raise LLMServiceError("LLM mengembalikan response kosong")
 
-        return response.text
+        return outcome.text
 
     async def chat_with_history(
         self, history: list[dict[str, str]], *, system_instruction: str | None = None
     ) -> str:
-        contents = [
-            {
-                "role": "user" if turn["role"] == "user" else "model",
-                "parts": [{"text": turn["content"]}],
-            }
-            for turn in history
-        ]
-
-        config = types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            tools=AVAILABLE_TOOLS,
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                maximum_remote_calls=MAX_TOOL_CALLS_PER_REQUEST
-            ),
-        )
         try:
-            response = await self._generate(
-                method="chat_with_history", contents=contents, config=config
+            outcome = await self._simple_provider.generate(
+                history, system_instruction=system_instruction, use_tools=True
             )
-        except APIError as exc:
-            logger.error("Gemini API error: %s", exc)
-            retryable = exc.code in (429, 503)
-            raise LLMServiceError(f"Gagal menghubungi Gemini: {exc}", retryable=retryable) from exc
+        except ProviderError as exc:
+            logger.error("Provider error: %s", exc)
+            raise LLMServiceError(f"Gagal menghubungi LLM: {exc}", retryable=exc.retryable) from exc
 
-        if not response.text:
-            raise LLMServiceError("Gemini mengembalikan response kosong")
+        if not outcome.text:
+            raise LLMServiceError("LLM mengembalikan response kosong")
 
-        return response.text
+        return outcome.text
 
     async def extract_fact(
         self, message: str, existing_memories: list[str]
@@ -267,21 +191,16 @@ class LLMService:
         )
 
         try:
-            response = await self._generate(
-                method="extract_fact",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=MemoryExtraction,
-                ),
+            outcome = await self._simple_provider.generate(
+                [{"role": "user", "content": prompt}], response_schema=MemoryExtraction
             )
-        except APIError as exc:
-            logger.error("Gemini extraction error :%s", exc)
+        except ProviderError as exc:
+            logger.error("Provider extraction error :%s", exc)
             raise LLMServiceError(f"Gagal ekstraksi memori :{exc}") from exc
 
-        result = _as_structured(response, MemoryExtraction)
+        result = outcome.parsed if isinstance(outcome.parsed, MemoryExtraction) else None
         if result is None:
-            logger.warning("Gemini mengembalikan format ekstraksi memori yang tidak terduga")
+            logger.warning("LLM mengembalikan format ekstraksi memori yang tidak terduga")
             return None
 
         if result.operation in ("UPDATE", "DELETE"):
@@ -290,7 +209,7 @@ class LLMService:
             )
             if not valid_index:
                 logger.warning(
-                    "Gemini minta %s dengan target_index tidak valid (%s dari %d memory) "
+                    "LLM minta %s dengan target_index tidak valid (%s dari %d memory) "
                     "-- diperlakukan sebagai IGNORE",
                     result.operation,
                     result.target_index,
@@ -307,6 +226,11 @@ class LLMService:
         return result
 
     async def create_plan(self, goal: str) -> Plan:
+        """Dipakai oleh endpoint `/conversations/{id}/plan` yang MEMANG selalu
+        ingin membuat plan langsung (user sudah eksplisit minta rencana, tidak
+        perlu diklasifikasi dulu) -- beda dari jalur chat biasa yang lewat
+        `classify_and_plan` (perlu tahu dulu apakah pesan butuh planning).
+        """
         prompt = (
             "Anda adalah planner untuk asisten AI. Pecah goal berikut"
             "menjadi beberapa task KONKRET dan BERURUTAN yang -- kalau"
@@ -321,88 +245,32 @@ class LLMService:
         )
 
         try:
-            response = await self._generate(
-                method="create_plan",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=Plan,
-                ),
+            outcome = await self._planner_provider.generate(
+                [{"role": "user", "content": prompt}], response_schema=Plan
             )
-        except APIError as exc:
-            logger.error("Gemini planning erreor:%s", exc)
+        except ProviderError as exc:
+            logger.error("Provider planning error:%s", exc)
             raise LLMServiceError(f"Gagal membuat plan:{exc}") from exc
 
-        plan = _as_structured(response, Plan)
+        plan = outcome.parsed if isinstance(outcome.parsed, Plan) else None
         if plan is None:
-            raise LLMServiceError("Gemini mengembalikan plan yang tidak valid.")
+            raise LLMServiceError("LLM mengembalikan plan yang tidak valid.")
         return plan
 
-    async def execute_task(self, task_description: str, prior_context: str) -> str:
-        prompt = f'Kerjakan task berikut: "{task_description}"'
-        if prior_context:
-            prompt += (
-                f"\n\nKonteks dari task-task sebelumnya yang sudahdikerjakan:\n {prior_context}"
-            )
+    async def classify_and_plan(self, message: str) -> MessagePlan:
+        """Gabungan `classify_message` + `create_plan` dalam SATU panggilan.
 
-        config = types.GenerateContentConfig(
-            tools=AVAILABLE_TOOLS,
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                maximum_remote_calls=MAX_TOOL_CALLS_PER_REQUEST
-            ),
-        )
+        Dulu: 1 panggilan untuk tanya "perlu planning?", lalu KALAU ya, 1
+        panggilan lagi untuk minta plan-nya. Sekarang keduanya diminta
+        sekaligus -- model tetap boleh menjawab needs_planning=False dengan
+        `tasks` kosong, tidak ada perilaku yang hilang, cuma jadi 1 request.
 
-        try:
-            response = await self._generate(method="execute_task", contents=prompt, config=config)
-        except APIError as exc:
-            logger.error("Gemini task execution error : %s", exc)
-            retryable = exc.code in (429, 503)
-            raise LLMServiceError(
-                f"Gagal menjalankan task '{task_description}':{exc}", retryable=retryable
-            ) from exc
-
-        if not response.text:
-            raise LLMServiceError(
-                f"Gemin mengembalikan hasil kosong untuk task '{task_description}'."
-            )
-        return response.text
-
-    async def evaluate_result(self, task_description: str, result: str) -> TaskEvaluation:
-        prompt = (
-            "Evaluasi apakah Hasil berikut benar benar menyelesaikan "
-            "Task dengan baik. \n\n"
-            f'Task: "{task_description}"\n\n'
-            f"Hasil:\n{result}\n\n"
-            "Kalau hasil sudah cukup baik dan relevan, jawab is_correct=true."
-            "Kalau ada yang kurang, salah, atau tidak relevan dengan task, "
-            "jawab is_correct=false dan isi 'feedback' dengan penjealsan"
-            "SINGKAT apa yang perlu diperbaiki"
-        )
-
-        try:
-            response = await self._generate(
-                method="evaluate_result",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=TaskEvaluation,
-                ),
-            )
-        except APIError as exc:
-            logger.error("Gemini evaluation error: %s", exc)
-            raise LLMServiceError(f"Gagal mengevaluasi hasil : {exc}") from exc
-
-        evaluation = _as_structured(response, TaskEvaluation)
-
-        if evaluation is None:
-            logger.warning(
-                "Gemini mengembalikan format evaluasi yang tak terduga, fallback ke is_correct=True"
-            )
-            return TaskEvaluation(is_correct=True, feedback="")
-
-        return evaluation
-
-    async def classify_message(self, message: str) -> bool:
+        Sengaja pakai `_simple_provider` (bukan `_planner_provider`) walau
+        method ini juga menyusun task -- dipanggil di SETIAP pesan user
+        (keputusan routing), jadi harus tetap murah/cepat. Kualitas
+        pemecahan task tidak terlalu kritis di sini karena pekerjaan berat
+        yang sesungguhnya ada di `execute_and_evaluate` (tier planner).
+        """
         prompt = (
             "Tentukan apakah pesan berikut BUTUH RENCANA BERTAHAP"
             "(dipecah jadi beberapa langkah berurutan) untuk "
@@ -414,24 +282,86 @@ class LLMService:
             '(mis. "rencanakan...", "buatkan rencana...", "bantu aku '
             'mempersiapkan..." untuk hal yang butuh beberapa tahap '
             "berurutan). Pertanyaan biasa, obrolan, permintaan info "
-            "sederhana, atau perhitungan langsung -> needs_planning=false."
+            "sederhana, atau perhitungan langsung -> needs_planning=false.\n\n"
+            "KALAU needs_planning=true, isi juga `tasks`: pecah pesan itu "
+            "menjadi beberapa task KONKRET dan BERURUTAN yang -- kalau "
+            "dikerjakan satu per satu -- akan memenuhi permintaan itu. "
+            "Setiap task harus SPESIFIK dan bisa dikerjakan sendiri (bukan "
+            "sub-goal abstrak). Jangan buat lebih dari 6 task -- kalau "
+            "permintaannya sangat sederhana, 1-2 task saja cukup. Urutkan "
+            "task sesuai urutan pengerjaan yang logis.\n"
+            "KALAU needs_planning=false, `tasks` dikosongkan saja ([])."
         )
 
         try:
-            response = await self._generate(
-                method="classify_message",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=MessageRoute,
-                ),
+            outcome = await self._simple_provider.generate(
+                [{"role": "user", "content": prompt}], response_schema=MessagePlan
             )
-        except APIError as exc:
-            logger.error("Gemini routing error: %s", exc)
-            return False
+        except ProviderError as exc:
+            logger.error("Provider routing/planning error: %s", exc)
+            return MessagePlan(needs_planning=False, tasks=[])
 
-        route = _as_structured(response, MessageRoute)
-        return route.needs_planning if route else False
+        result = outcome.parsed if isinstance(outcome.parsed, MessagePlan) else None
+        if result is None:
+            logger.warning("LLM mengembalikan format classify_and_plan yang tak terduga")
+            log_event(
+                logger, "llm_parse_failed", method="classify_and_plan", raw_response=outcome.text
+            )
+            return MessagePlan(needs_planning=False, tasks=[])
+        return result
+
+    async def execute_and_evaluate(self, task_description: str, prior_context: str) -> TaskOutcome:
+        """Gabungan `execute_task` + `evaluate_result` dalam SATU panggilan.
+
+        Dulu: 1 panggilan untuk mengerjakan task, lalu 1 panggilan terpisah
+        untuk minta model lain (sebenarnya model yang sama, request beda)
+        menilai hasilnya. Sekarang model diminta mengerjakan task DAN
+        menilai hasilnya sendiri dalam satu respons terstruktur.
+
+        `use_tools=True` -- provider boleh memakai tools (kalkulator,
+        datetime, web search) untuk mengerjakan task, sama seperti sebelumnya.
+        """
+        prompt = f'Kerjakan task berikut: "{task_description}"'
+        if prior_context:
+            prompt += (
+                f"\n\nKonteks dari task-task sebelumnya yang sudah dikerjakan:\n {prior_context}"
+            )
+        prompt += (
+            "\n\nSetelah mengerjakan, evaluasi SENDIRI hasil kamu: isi "
+            "`is_correct=true` kalau hasil sudah cukup baik dan relevan "
+            "dengan task. Kalau ada yang kurang, salah, atau tidak relevan, "
+            "isi `is_correct=false` dan isi `feedback` dengan penjelasan "
+            "SINGKAT apa yang perlu diperbaiki."
+        )
+
+        try:
+            outcome = await self._planner_provider.generate(
+                [{"role": "user", "content": prompt}],
+                response_schema=TaskOutcome,
+                use_tools=True,
+            )
+        except ProviderError as exc:
+            logger.error("Provider task execution error : %s", exc)
+            raise LLMServiceError(
+                f"Gagal menjalankan task '{task_description}':{exc}", retryable=exc.retryable
+            ) from exc
+
+        result = outcome.parsed if isinstance(outcome.parsed, TaskOutcome) else None
+        if result is None:
+            logger.warning(
+                "LLM mengembalikan format execute_and_evaluate yang tak terduga, "
+                "fallback ke is_correct=True"
+            )
+            log_event(
+                logger, "llm_parse_failed", method="execute_and_evaluate", raw_response=outcome.text
+            )
+            result = TaskOutcome(result=outcome.text or "", is_correct=True, feedback="")
+
+        if not result.result:
+            raise LLMServiceError(
+                f"LLM mengembalikan hasil kosong untuk task '{task_description}'."
+            )
+        return result
 
 
 llm_service = LLMService()

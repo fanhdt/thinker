@@ -68,6 +68,11 @@ async def send_message(
         )
     except LLMServiceError as exc:
         logger.error("Chat request failed %s", exc)
+        if exc.retryable:
+            raise HTTPException(
+                status_code=429,
+                detail="Layanan AI sedang dibatasi (rate limit). Coba lagi dalam beberapa saat.",
+            ) from exc
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     tasks_out = None

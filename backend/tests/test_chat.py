@@ -19,6 +19,13 @@ class FailingLLMService:
         raise LLMServiceError("Simulasi kegagalan gemini")
 
 
+class RateLimitedLLMService:
+    model = "fake-model"
+
+    async def chat(self, message: str) -> str:
+        raise LLMServiceError("429 RESOURCE_EXHAUSTED", retryable=True)
+
+
 client = TestClient(app)
 
 
@@ -41,4 +48,15 @@ def test_chat_returns_503_when_llm_service_fails():
     app.dependency_overrides[get_llm_service] = lambda: FailingLLMService()
     response = client.post("/chat", json={"message": "halo"})
     assert response.status_code == 503
+    app.dependency_overrides.clear()
+
+
+def test_chat_returns_429_when_llm_service_rate_limited():
+    """Error yang retryable (mis. 429 dari Gemini) harus diteruskan sebagai 429
+    dengan pesan yang ramah -- bukan 503 generik dengan teks error mentah,
+    dan bukan diam-diam ditelan begitu saja."""
+    app.dependency_overrides[get_llm_service] = lambda: RateLimitedLLMService()
+    response = client.post("/chat", json={"message": "halo"})
+    assert response.status_code == 429
+    assert "rate limit" in response.json()["detail"].lower()
     app.dependency_overrides.clear()

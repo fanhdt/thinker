@@ -28,7 +28,7 @@ async def _execute_task_with_reflection(
     llm: PlannerLLM, task_description: str, context_so_far: str
 ) -> TaskExecution:
     feedback = ""
-    result = ""
+    outcome_result = ""
 
     total_attempts = MAX_REFLECTION_ATTEMPTS + 1
     for attempt in range(1, total_attempts + 1):
@@ -38,10 +38,10 @@ async def _execute_task_with_reflection(
                 f"\n\nCatatan dari percobaan sebelumnya yang KURANG TEPAT: "
                 f"{feedback}\nPerbaiki hasil sesuai catatan ini."
             )
-        result = await llm.execute_task(task_description, prompt_context)
-        evaluation = await llm.evaluate_result(task_description, result)
+        outcome = await llm.execute_and_evaluate(task_description, prompt_context)
+        outcome_result = outcome.result
 
-        if evaluation.is_correct:
+        if outcome.is_correct:
             log_event(
                 logger,
                 "task_execution_finished",
@@ -51,12 +51,12 @@ async def _execute_task_with_reflection(
             )
             return TaskExecution(
                 description=task_description,
-                result=result,
+                result=outcome_result,
                 passed_evaluation=True,
                 attempts=attempt,
             )
 
-        feedback = evaluation.feedback
+        feedback = outcome.feedback
         log_event(
             logger,
             "reflection_retry",
@@ -76,16 +76,29 @@ async def _execute_task_with_reflection(
 
     return TaskExecution(
         description=task_description,
-        result=result,
+        result=outcome_result,
         passed_evaluation=False,
         attempts=total_attempts,
     )
 
 
 async def run_plan(
-    llm: PlannerLLM, goal: str, personalization_context: str = ""
+    llm: PlannerLLM,
+    goal: str,
+    personalization_context: str = "",
+    plan: Plan | None = None,
 ) -> PlanExecutionResult:
-    plan: Plan = await llm.create_plan(goal)
+    """Jalankan plan sampai selesai.
+
+    `plan` opsional: kalau pemanggil (mis. orchestrator_service, lewat
+    `classify_and_plan`) sudah dapat task-tasknya dalam panggilan yang sama
+    dengan keputusan routing, plan itu dioper langsung ke sini supaya TIDAK
+    memicu panggilan `create_plan` kedua yang mubazir. Kalau tidak diisi
+    (mis. endpoint `/conversations/{id}/plan` yang manggil goal apa adanya),
+    baru diminta ke `llm.create_plan(goal)` seperti sebelumnya.
+    """
+    if plan is None:
+        plan = await llm.create_plan(goal)
 
     executions: list[TaskExecution] = []
     context_so_far = f"{personalization_context}\n" if personalization_context else ""

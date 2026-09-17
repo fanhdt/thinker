@@ -1,96 +1,167 @@
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
-from google.genai import types
-from google.genai.errors import APIError
 
-from app.services.llm import LLMService, LLMServiceError, _extract_tool_calls
+from app.services.llm import LLMService, LLMServiceError, MessagePlan, TaskOutcome
+from app.services.llm_providers.base import GenerationResult, ProviderError
 
 
-def _build_service_with_fake_client(api_error: APIError) -> LLMService:
-    """Buat LLMService tanpa melalui __init__ (jadi tidak butuh gemini_api_key asli).
-
-    __new__ melewati __init__ sepenuhnya, jadi kita bisa suntik `_client` palsu
-    yang perilakunya kita kontrol penuh di test.
+class FakeProvider:
+    """Fake generik yang mengimplementasikan `LLMProvider` Protocol -- dipakai
+    untuk menguji LOGIKA BISNIS di `LLMService` (susunan prompt, penanganan
+    parsing gagal, dst) tanpa peduli provider konkret mana yang sebenarnya
+    dipakai. Tes untuk perilaku Gemini-spesifik ada di test_gemini_provider.py.
     """
-    service = LLMService.__new__(LLMService)
-    service._model = "fake-model"
 
-    fake_client = MagicMock()
-    fake_client.aio.models.generate_content = AsyncMock(side_effect=api_error)
-    service._client = fake_client
+    def __init__(self, result: GenerationResult | None = None, error: ProviderError | None = None):
+        self.result = result
+        self.error = error
+        self.calls: list[dict] = []
+        self.model = "fake-model"
 
-    return service
+    async def generate(
+        self,
+        messages,
+        *,
+        system_instruction=None,
+        response_schema=None,
+        use_tools=False,
+    ) -> GenerationResult:
+        self.calls.append(
+            {
+                "messages": messages,
+                "system_instruction": system_instruction,
+                "response_schema": response_schema,
+                "use_tools": use_tools,
+            }
+        )
+        if self.error is not None:
+            raise self.error
+        assert self.result is not None
+        return self.result
 
 
-@pytest.mark.parametrize("status_code", [429, 503])
-async def test_chat_marks_error_as_retryable_for_429_and_503(status_code):
-    """Ini test yang seharusnya menangkap bug `exc.code in (429.503)` di masa lalu.
-
-    Sebelum fix: baris itu adalah `exc.code in (429.503)` -- (429.503) adalah
-    float, bukan tuple, jadi `in` akan melempar TypeError, BUKAN LLMServiceError.
-    Test ini gagal dengan TypeError sebelum fix, dan lulus setelah fix.
+@pytest.mark.parametrize("retryable", [True, False])
+async def test_chat_propagates_provider_retryable_flag(retryable):
+    """LLMServiceError.retryable harus mengikuti apa yang provider bilang --
+    LLMService tidak lagi menentukan sendiri kode error mana yang retryable
+    (itu tanggung jawab provider), cuma meneruskan.
     """
-    api_error = APIError(status_code, {"message": "rate limited atau service unavailable"})
-    service = _build_service_with_fake_client(api_error)
+    provider = FakeProvider(error=ProviderError("boom", retryable=retryable))
+    service = LLMService(provider=provider)
 
     with pytest.raises(LLMServiceError) as exc_info:
         await service.chat("halo")
 
-    assert exc_info.value.retryable is True
+    assert exc_info.value.retryable is retryable
 
 
-@pytest.mark.parametrize("status_code", [400, 401, 404])
-async def test_chat_marks_error_as_not_retryable_for_client_errors(status_code):
-    """Error 4xx selain 429 (mis. bad request, auth) tidak boleh dianggap retryable --
-    mengulang request yang salah/tidak sah tidak akan pernah berhasil.
-    """
-    api_error = APIError(status_code, {"message": "client error"})
-    service = _build_service_with_fake_client(api_error)
-
-    with pytest.raises(LLMServiceError) as exc_info:
-        await service.chat("halo")
-
-    assert exc_info.value.retryable is False
-
-
-async def test_chat_raises_when_gemini_returns_empty_response():
-    service = LLMService.__new__(LLMService)
-    service._model = "fake-model"
-
-    fake_response = MagicMock()
-    fake_response.text = ""
-
-    fake_client = MagicMock()
-    fake_client.aio.models.generate_content = AsyncMock(return_value=fake_response)
-    service._client = fake_client
+async def test_chat_raises_when_provider_returns_empty_text():
+    provider = FakeProvider(result=GenerationResult(text=""))
+    service = LLMService(provider=provider)
 
     with pytest.raises(LLMServiceError):
         await service.chat("halo")
 
 
-def test_extract_tool_calls_returns_empty_list_when_no_history():
-    response = MagicMock(spec=[])  # tidak ada atribut apa pun, mirip response tanpa AFC
-    assert _extract_tool_calls(response) == []
+async def test_chat_with_history_requests_tools():
+    """chat_with_history harus selalu minta tools (kalkulator/datetime/web
+    search tersedia untuk chat biasa, bukan cuma di planner)."""
+    provider = FakeProvider(result=GenerationResult(text="balasan"))
+    service = LLMService(provider=provider)
+
+    await service.chat_with_history(
+        [{"role": "user", "content": "halo"}], system_instruction="konteks personalisasi"
+    )
+
+    assert provider.calls[0]["use_tools"] is True
+    assert provider.calls[0]["system_instruction"] == "konteks personalisasi"
 
 
-def test_extract_tool_calls_collects_function_call_names_in_order():
-    """Regresi tak langsung untuk Bagian 21 ('selected tools'): sebelumnya
-    tidak ada visibilitas sama sekali tool apa yang benar-benar dipanggil
-    Gemini lewat automatic function calling."""
-    history = [
-        types.Content(
-            role="model",
-            parts=[
-                types.Part(function_call=types.FunctionCall(name="calculator", args={})),
-                types.Part(text="hasil kalkulasi: 4"),
-            ],
-        ),
-        types.Content(
-            role="model",
-            parts=[types.Part(function_call=types.FunctionCall(name="datetime_now", args={}))],
-        ),
-    ]
-    response = MagicMock(automatic_function_calling_history=history)
+async def test_classify_and_plan_falls_back_safely_when_parsing_fails():
+    """Kalau provider gagal mengembalikan MessagePlan yang valid (mis. model
+    lain yang kurang patuh ke response_schema), LLMService tidak boleh
+    meledak -- fallback ke needs_planning=False, bukan crash."""
+    provider = FakeProvider(result=GenerationResult(text="bukan json valid", parsed=None))
+    service = LLMService(provider=provider)
 
-    assert _extract_tool_calls(response) == ["calculator", "datetime_now"]
+    result = await service.classify_and_plan("Rencanakan liburan")
+
+    assert result == MessagePlan(needs_planning=False, tasks=[])
+
+
+async def test_execute_and_evaluate_falls_back_to_is_correct_true_on_parse_failure():
+    """Sama seperti classify_and_plan: kalau TaskOutcome gagal di-parse,
+    fallback ke is_correct=True dengan teks mentah sebagai hasil -- bukan crash,
+    dan bukan diam-diam kehilangan apa yang model tulis."""
+    provider = FakeProvider(result=GenerationResult(text="ini hasil mentah", parsed=None))
+    service = LLMService(provider=provider)
+
+    outcome = await service.execute_and_evaluate("task apapun", "")
+
+    assert outcome == TaskOutcome(result="ini hasil mentah", is_correct=True, feedback="")
+
+
+async def test_execute_and_evaluate_requests_tools():
+    provider = FakeProvider(
+        result=GenerationResult(
+            text="{}", parsed=TaskOutcome(result="hasil", is_correct=True, feedback="")
+        )
+    )
+    service = LLMService(provider=provider)
+
+    await service.execute_and_evaluate("task apapun", "")
+
+    assert provider.calls[0]["use_tools"] is True
+
+
+async def test_model_property_reflects_active_provider_model():
+    provider = FakeProvider()
+    provider.model = "some-provider/some-model"
+    service = LLMService(provider=provider)
+
+    assert service.model == "some-provider/some-model"
+
+
+async def test_simple_tier_methods_use_simple_provider_not_planner():
+    """chat, chat_with_history, extract_fact, dan classify_and_plan harus
+    lewat provider tier SIMPLE -- ini yang dipanggil di setiap pesan user,
+    jadi harus tetap murah/cepat, bukan provider planner yang lebih mahal."""
+    simple = FakeProvider(result=GenerationResult(text="balasan"))
+    planner = FakeProvider(
+        result=GenerationResult(text="tidak boleh terpanggil untuk tier simple")
+    )
+    service = LLMService(simple_provider=simple, planner_provider=planner)
+
+    await service.chat("halo")
+    await service.chat_with_history([{"role": "user", "content": "halo"}])
+    await service.classify_and_plan("pesan apapun")
+
+    assert len(simple.calls) == 3
+    assert len(planner.calls) == 0
+
+
+async def test_planner_tier_methods_use_planner_provider_not_simple():
+    """create_plan dan execute_and_evaluate -- pekerjaan paling berat
+    reasoning-nya -- harus lewat provider tier PLANNER, bukan simple."""
+    simple = FakeProvider(result=GenerationResult(text="tidak boleh terpanggil untuk planner"))
+    planner = FakeProvider(
+        result=GenerationResult(
+            text="{}", parsed=TaskOutcome(result="hasil", is_correct=True, feedback="")
+        )
+    )
+    service = LLMService(simple_provider=simple, planner_provider=planner)
+
+    await service.execute_and_evaluate("task apapun", "")
+
+    assert len(planner.calls) == 1
+    assert len(simple.calls) == 0
+
+
+async def test_model_and_planner_model_report_their_own_tier():
+    simple = FakeProvider()
+    simple.model = "cheap-model"
+    planner = FakeProvider()
+    planner.model = "strong-model"
+    service = LLMService(simple_provider=simple, planner_provider=planner)
+
+    assert service.model == "cheap-model"
+    assert service.planner_model == "strong-model"

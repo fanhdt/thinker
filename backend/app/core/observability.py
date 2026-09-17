@@ -7,6 +7,8 @@ from collections.abc import Callable
 from types import CoroutineType
 from typing import Any, ParamSpec, TypeVar
 
+from app.core.logging_config import log_event
+
 logger = logging.getLogger("thinker.observability")
 
 P = ParamSpec("P")
@@ -21,6 +23,11 @@ def log_duration(
     memanggil Gemini API supaya kita tahu bagian mana yang lambat tanpa harus
     menebak atau menambah timer manual satu-satu di tiap fungsi (itu akan
     duplikat 6-7 kali dan gampang lupa dipasang di fungsi baru).
+
+    Log lewat `log_event` (bukan `logger.info("op=%s ...", ...)` format string)
+    supaya konsisten JSON dengan event lain di seluruh codebase (`llm_call`,
+    `memory_retrieval`, `task_execution_finished`, dst) -- semua bisa
+    di-`jq '.data.xxx'` dengan cara yang sama, bukan dua "dialek" log berbeda.
 
     Catatan tipe: anotasi memakai `types.CoroutineType`, bukan `typing.Coroutine`
     yang lebih umum tapi abstrak -- `CoroutineType` adalah tipe konkret yang
@@ -40,27 +47,13 @@ def log_duration(
                 return await func(*args, **kwargs)
             finally:
                 duration_ms = (time.monotonic() - start) * 1000
-                logger.info("op=%s duration_ms=%.1f", operation, duration_ms)
+                log_event(
+                    logger,
+                    "operation_finished",
+                    operation=operation,
+                    duration_ms=round(duration_ms, 1),
+                )
 
         return wrapper
 
     return decorator
-
-
-def log_token_usage(operation: str, response: Any) -> None:
-    """Log jumlah token dari response Gemini, kalau SDK menyediakannya.
-    `usage_metadata` bisa None (mis. saat error partial), jadi semua field
-    diakses defensif -- jangan sampai logging observability sendiri yang
-    menyebabkan crash.
-    """
-    usage = getattr(response, "usage_metadata", None)
-    if usage is None:
-        return
-
-    logger.info(
-        "op=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s",
-        operation,
-        usage.prompt_token_count,
-        usage.candidates_token_count,
-        usage.total_token_count,
-    )
