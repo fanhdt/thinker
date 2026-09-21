@@ -43,8 +43,7 @@ def _build_provider_instances(provider: str) -> list[LLMProvider]:
     if provider == "gemini":
         api_key = _require(settings.gemini_api_key, provider, "gemini_api_key")
         return [
-            GeminiProvider(api_key=key, model=settings.gemini_model)
-            for key in _split_keys(api_key)
+            GeminiProvider(api_key=key, model=settings.gemini_model) for key in _split_keys(api_key)
         ]
 
     if provider == "openai":
@@ -143,9 +142,7 @@ def build_simple_provider() -> LLMProvider:
     sebelum tiering ada.
     """
     if settings.llm_provider_simple_chain or settings.llm_provider_simple:
-        return _build_from_config(
-            settings.llm_provider_simple_chain, settings.llm_provider_simple
-        )
+        return _build_from_config(settings.llm_provider_simple_chain, settings.llm_provider_simple)
     return build_provider()
 
 

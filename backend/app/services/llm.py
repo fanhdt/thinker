@@ -127,9 +127,7 @@ class LLMService:
 
     async def chat(self, message: str) -> str:
         try:
-            outcome = await self._simple_provider.generate(
-                [{"role": "user", "content": message}]
-            )
+            outcome = await self._simple_provider.generate([{"role": "user", "content": message}])
         except ProviderError as exc:
             logger.error("Provider error: %s", exc)
             raise LLMServiceError(f"Gagal menghubungi LLM:{exc}", retryable=exc.retryable) from exc
@@ -348,19 +346,60 @@ class LLMService:
 
         result = outcome.parsed if isinstance(outcome.parsed, TaskOutcome) else None
         if result is None:
-            logger.warning(
-                "LLM mengembalikan format execute_and_evaluate yang tak terduga, "
-                "fallback ke is_correct=True"
-            )
-            log_event(
-                logger, "llm_parse_failed", method="execute_and_evaluate", raw_response=outcome.text
-            )
-            result = TaskOutcome(result=outcome.text or "", is_correct=True, feedback="")
+            if outcome.text:
+                # Parsing gagal TAPI ada teks -- kemungkinan besar model
+                # menjawab dengan baik, cuma tidak persis mengikuti schema.
+                # Aman diperlakukan sebagai sukses (is_correct=True).
+                logger.warning(
+                    "LLM mengembalikan format execute_and_evaluate yang tak terduga, "
+                    "fallback ke is_correct=True"
+                )
+                log_event(
+                    logger,
+                    "llm_parse_failed",
+                    method="execute_and_evaluate",
+                    raw_response=outcome.text,
+                )
+                result = TaskOutcome(result=outcome.text, is_correct=True, feedback="")
+            else:
+                # TIDAK ADA teks sama sekali -- mis. model kehabisan jatah
+                # tool-call sebelum sempat menjawab (lihat MAX_TOOL_CALLS_PER_REQUEST
+                # di gemini.py). Dulu ini langsung raise LLMServiceError yang
+                # MEMBUNUH SELURUH pipeline pesan -- padahal reflection loop di
+                # planner_service sudah punya mekanisme yang pas untuk ini:
+                # tandai is_correct=False supaya di-retry (dengan feedback),
+                # dan kalau tetap gagal setelah semua percobaan, task itu saja
+                # yang ditandai "belum sempurna" -- task lain di plan tetap lanjut.
+                logger.warning(
+                    "LLM tidak menghasilkan jawaban sama sekali untuk task '%s' "
+                    "(kemungkinan kehabisan jatah tool-call)",
+                    task_description,
+                )
+                log_event(
+                    logger, "llm_empty_response", method="execute_and_evaluate", raw_response=""
+                )
+                result = TaskOutcome(
+                    result="(tidak ada jawaban)",
+                    is_correct=False,
+                    feedback=(
+                        "Jawaban sebelumnya kosong (kemungkinan kehabisan jatah pemanggilan "
+                        "tool). Coba jawab dengan info yang sudah ada, jangan memanggil tool "
+                        "lebih banyak dari yang perlu."
+                    ),
+                )
 
-        if not result.result:
-            raise LLMServiceError(
-                f"LLM mengembalikan hasil kosong untuk task '{task_description}'."
+        if not result.result and result.is_correct:
+            # Kasus langka: parsing terstruktur BERHASIL, tapi `result` kosong
+            # dan model bilang `is_correct=True` -- kombinasi yang tidak
+            # masuk akal (tidak mungkin jawaban kosong itu "benar"). Turunkan
+            # jadi is_correct=False supaya di-retry, bukan diteruskan begitu
+            # saja ke summary akhir.
+            result = TaskOutcome(
+                result="(tidak ada jawaban)",
+                is_correct=False,
+                feedback="Jawaban sebelumnya kosong padahal ditandai benar. Coba jawab ulang.",
             )
+
         return result
 
 

@@ -34,7 +34,7 @@ async def _handle_update(client: TelegramClient, update: dict) -> None:
             result = await message_pipeline.process_incoming_message(
                 session, llm_service, embedding_service, conversation, text
             )
-          
+
         except LLMServiceError as exc:
             logger.error(
                 "Gagal proses pesan Telegram dari chat %s: %s",

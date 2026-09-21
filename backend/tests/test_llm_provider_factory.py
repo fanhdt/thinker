@@ -10,16 +10,9 @@ from app.services.llm_providers.fallback import FallbackProvider
 from app.services.llm_providers.gemini import GeminiProvider
 from app.services.llm_providers.openai_compatible import OpenAICompatibleProvider
 
-
-@pytest.fixture(autouse=True)
-def _reset_settings():
-    """Simpan & kembalikan settings asli -- test ini sengaja mengubah
-    `settings.llm_provider` dkk untuk menguji factory, jangan sampai bocor
-    ke test lain yang jalan setelahnya."""
-    original = settings.model_dump()
-    yield
-    for key, value in original.items():
-        setattr(settings, key, value)
+# Fixture `_reset_settings` sekarang ada di tests/conftest.py (autouse, global)
+# -- supaya berlaku untuk SEMUA file test yang menyentuh `settings.llm_provider*`,
+# bukan cuma file ini. Lihat komentar di conftest.py untuk alasannya.
 
 
 def test_factory_builds_gemini_provider_by_default():

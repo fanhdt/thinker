@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     app_name: str = "Thinker"
     environment: str = "development"
     debug: bool = True
-    
+
     llm_provider: str = "gemini"
 
     llm_provider_chain: str | None = None

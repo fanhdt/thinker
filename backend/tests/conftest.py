@@ -3,16 +3,30 @@ from collections.abc import AsyncGenerator
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.config import settings
 from app.db.session import get_db_session
 from app.main import app
 
 
+@pytest.fixture(autouse=True)
+def _reset_llm_provider_settings():
+    """Reset konfigurasi LLM sebelum setiap test dan pulihkan setelahnya."""
+    original = settings.model_dump()
+
+    settings.llm_provider_chain = None
+    settings.llm_provider_simple = None
+    settings.llm_provider_simple_chain = None
+    settings.llm_provider_planner = None
+    settings.llm_provider_planner_chain = None
+
+    yield
+
+    for key, value in original.items():
+        setattr(settings, key, value)
+
+
 class FakeSession:
-    """Sesi DB palsu untuk test API. Route yang service-layer-nya sudah
-    kita mock total tidak pernah benar-benar menyentuh session ini --
-    dia cuma perlu 'ada' supaya dependency injection FastAPI tidak error
-    saat mencari get_db_session.
-    """
+    """Sesi DB palsu untuk test API."""
 
     async def commit(self) -> None:
         pass
@@ -30,11 +44,11 @@ async def _fake_db_session() -> AsyncGenerator:
 
 @pytest.fixture
 def client():
-    """Fixture bersama untuk semua test API. Pakai dengan menambahkan
-    parameter `client` di signature fungsi test -- pytest otomatis
-    menyuntikkannya, tidak perlu import apapun dari file ini.
-    """
+    """Fixture bersama untuk semua test API."""
     app.dependency_overrides[get_db_session] = _fake_db_session
+
     with TestClient(app) as test_client:
         yield test_client
+
     app.dependency_overrides.clear()
+

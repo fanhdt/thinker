@@ -12,7 +12,9 @@ class PlannerLLM(Protocol):
 
     async def create_plan(self, goal: str) -> Plan: ...
 
-    async def execute_and_evaluate(self, task_description: str, prior_context: str) -> TaskOutcome: ...
+    async def execute_and_evaluate(
+        self, task_description: str, prior_context: str
+    ) -> TaskOutcome: ...
 
 
 class OrchestratorLLM(PlannerLLM, Protocol):

@@ -58,9 +58,7 @@ def _accumulate_usage(total: TokenUsage, usage) -> None:
     if usage is None:
         return
     total.prompt_tokens = (total.prompt_tokens or 0) + (getattr(usage, "prompt_tokens", 0) or 0)
-    total.output_tokens = (total.output_tokens or 0) + (
-        getattr(usage, "completion_tokens", 0) or 0
-    )
+    total.output_tokens = (total.output_tokens or 0) + (getattr(usage, "completion_tokens", 0) or 0)
     total.total_tokens = (total.total_tokens or 0) + (getattr(usage, "total_tokens", 0) or 0)
 
 

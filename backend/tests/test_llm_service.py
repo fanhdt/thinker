@@ -126,9 +126,7 @@ async def test_simple_tier_methods_use_simple_provider_not_planner():
     lewat provider tier SIMPLE -- ini yang dipanggil di setiap pesan user,
     jadi harus tetap murah/cepat, bukan provider planner yang lebih mahal."""
     simple = FakeProvider(result=GenerationResult(text="balasan"))
-    planner = FakeProvider(
-        result=GenerationResult(text="tidak boleh terpanggil untuk tier simple")
-    )
+    planner = FakeProvider(result=GenerationResult(text="tidak boleh terpanggil untuk tier simple"))
     service = LLMService(simple_provider=simple, planner_provider=planner)
 
     await service.chat("halo")
@@ -165,3 +163,35 @@ async def test_model_and_planner_model_report_their_own_tier():
 
     assert service.model == "cheap-model"
     assert service.planner_model == "strong-model"
+
+
+async def test_execute_and_evaluate_marks_incorrect_on_totally_empty_response():
+    """Regresi: dulu response kosong (mis. model kehabisan jatah tool-call
+    sebelum sempat menjawab) langsung `raise LLMServiceError`, yang
+    MEMBUNUH SELURUH pipeline pesan. Sekarang harus jadi is_correct=False
+    supaya reflection loop di planner_service yang menanganinya (retry),
+    bukan meledak sampai ke atas."""
+    provider = FakeProvider(result=GenerationResult(text="", parsed=None))
+    service = LLMService(provider=provider)
+
+    outcome = await service.execute_and_evaluate("task apapun", "")
+
+    assert outcome.is_correct is False
+    assert outcome.feedback  # ada penjelasan buat percobaan berikutnya
+
+
+async def test_execute_and_evaluate_downgrades_empty_result_marked_correct():
+    """Kasus langka tapi mungkin: parsing terstruktur BERHASIL, tapi field
+    `result`-nya kosong dan model bilang is_correct=True -- kombinasi yang
+    tidak masuk akal, harus diturunkan jadi is_correct=False juga."""
+    provider = FakeProvider(
+        result=GenerationResult(
+            text="{}", parsed=TaskOutcome(result="", is_correct=True, feedback="")
+        )
+    )
+    service = LLMService(provider=provider)
+
+    outcome = await service.execute_and_evaluate("task apapun", "")
+
+    assert outcome.is_correct is False
+    assert outcome.result  # tidak lagi string kosong
