@@ -260,3 +260,39 @@ Format tiap entri: Keputusan, Konteks, Opsi, Pendekatan yang dipilih, Alasan, Tr
 **Alasan**: Memakai mekanisme yang sudah ada dan sudah teruji (bounded reflection loop) alih-alih menambah penanganan error baru di tempat lain; kegagalan lokal ke satu task tidak lagi berarti kegagalan seluruh pesan.
 
 **Trade-off**: Menaikkan `MAX_TOOL_CALLS_PER_REQUEST` (5 -> 8) sebagai mitigasi tambahan mengurangi frekuensi kejadian ini, tapi tidak menghilangkannya -- task yang genuinely butuh lebih dari 8 pemanggilan tool berturut-turut akan tetap kena kasus ini, cuma sekarang gagalnya graceful (retry lalu "belum sempurna" kalau tetap gagal) alih-alih fatal.
+
+---
+
+## ADR-014: Stack Frontend -- React + TypeScript + Tailwind v4 + Zustand
+
+**Keputusan**: Frontend increment pertama (view Conversation) dibangun dengan Vite + React 19 + TypeScript, Tailwind v4 (lewat `@tailwindcss/vite`, tanpa config JS terpisah) untuk styling, dan Zustand untuk state percakapan aktif. Tanpa `react-router` dan tanpa Redux.
+
+**Konteks**: `ARCHITECTURE.md` sebelumnya mencatat rencana lama "Vue 3 + TypeScript + Tailwind" sebagai keterbatasan terbuka ("belum diimplementasikan sama sekali"). Belum ada satu baris kode frontend di repository sebelum ADR ini -- jadi ini keputusan baru, bukan melanjutkan implementasi yang sudah ada.
+
+**Opsi (framework)**:
+
+- **Vue 3** -- sesuai rencana awal di `ARCHITECTURE.md`, tapi rencana itu tidak pernah dieksekusi dan developer sekarang lebih memilih React untuk project ini.
+- **React 19 + TypeScript** -- ekosistem lebih besar, developer sudah familiar.
+
+**Pendekatan yang dipilih**: React.
+
+**Trade-off**: `ARCHITECTURE.md` §"Known Limitations" perlu diupdate (rencana Vue sudah tidak berlaku) -- dilakukan di commit yang sama dengan ADR ini.
+
+**Opsi (state management)**:
+
+- **Tanpa library, cuma `useState` lokal di komponen** -- paling sederhana, cocok kalau cuma ada satu view yang pakai data ini. Konsisten dengan §4.2 master prompt ("jangan tambah abstraction yang belum dibutuhkan"), tapi developer secara eksplisit minta state management sekarang supaya struktur siap dipakai lintas-view begitu Memory/Goals/Tasks view (Fase 8, §20) ditambahkan.
+- **Redux (+ Redux Toolkit)** -- standar lama, tapi butuh boilerplate lebih banyak (store setup, slice, `<Provider>` di `main.tsx`) untuk state yang sebenarnya masih sederhana (satu percakapan aktif).
+- **Zustand** -- store didefinisikan lewat satu `create()` call, dipakai langsung sebagai hook tanpa `<Provider>` pembungkus, API-nya minim.
+
+**Pendekatan yang dipilih**: Zustand.
+
+**Alasan**: Kompleksitas boilerplate Redux tidak sepadan dengan ukuran state saat ini (satu conversation aktif + daftar pesan); Zustand memberi global store (dibutuhkan begitu view kedua ditambahkan) dengan overhead paling kecil.
+
+**Trade-off**: Kalau nanti Thinker butuh state yang jauh lebih kompleks (banyak percakapan paralel, undo/redo, time-travel debugging), Redux Toolkit + DevTools ekstensinya lebih matang untuk itu -- migrasi dari Zustand ke Redux saat itu adalah biaya yang sadar diterima, bukan diabaikan.
+
+**Opsi (dev workflow)**:
+
+- **Docker Compose dari awal** -- konsisten dengan backend yang sudah punya `docker-compose.yml`, tapi menambah lapisan (rebuild image tiap ganti dependency) untuk tahap ketika UI masih berubah-ubah cepat.
+- **Vite dev server langsung (`npm run dev`)** -- hot reload instan, tanpa build step tambahan.
+
+**Pendekatan yang dipilih**: Vite dev server langsung untuk sekarang. Docker ditambah nanti kalau sudah ada kebutuhan deploy/production build, bukan di tahap eksplorasi UI.

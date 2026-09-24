@@ -4,6 +4,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import chat, conversations, documents, goals, memories, planner, profile
 from app.core.config import settings
@@ -30,6 +31,14 @@ app = FastAPI(
     debug=settings.debug,
     lifespan=lifespan,
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(chat.router)
 app.include_router(conversations.router)
 app.include_router(memories.router)

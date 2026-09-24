@@ -31,9 +31,17 @@ class Settings(BaseSettings):
     openrouter_site_url: str | None = None
     openrouter_app_name: str | None = None
 
-    database_url: str = "postgresql+asyncpg://thinker:thinker@localhost:5433/thinker"
+    database_url: str = "postgresql+asyncpg://thinker:thinker@localhost:5432/thinker"
 
     telegram_bot_token: str | None = None
+
+    # Origin frontend yang boleh memanggil API ini (dipisah koma untuk lebih dari satu,
+    # sama seperti pola LLM_PROVIDER_CHAIN). Default: Vite dev server lokal.
+    cors_origins: str = "http://localhost:5173"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     model_config = SettingsConfigDict(
         env_file=".env",
